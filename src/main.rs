@@ -1,6 +1,8 @@
+mod attachments;
 mod document;
 mod grep_search;
 mod navigation;
+mod playback;
 #[path = "../tools/profile.rs"]
 mod profile;
 mod quick_select;
@@ -61,6 +63,7 @@ struct Reader {
     preferences: Preferences,
     document: Option<Document>,
     cache: CommonMarkCache,
+    attachments: std::rc::Rc<std::cell::RefCell<attachments::Attachments>>,
     text_index: text_search::TextIndex,
     fonts: Option<fontdb::Database>,
     families: Vec<String>,
@@ -92,6 +95,7 @@ impl Reader {
             preferences,
             document: None,
             cache: CommonMarkCache::default(),
+            attachments: Default::default(),
             text_index: text_search::TextIndex::default(),
             fonts: None,
             families: Vec::new(),
@@ -141,6 +145,7 @@ impl Reader {
         }
     }
     fn clear_cache(&mut self, ctx: &egui::Context) {
+        self.attachments.borrow_mut().clear();
         self.cache = CommonMarkCache::default();
         self.text_index = text_search::TextIndex::default();
         ctx.forget_all_images();
@@ -159,7 +164,8 @@ impl Reader {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let path = rfd::FileDialog::new()
-                .add_filter("Markdown", &["md", "markdown", "mdown", "mkd", "txt"])
+                .add_filter("Markdown", &["md", "markdown", "mdown", "mkd"])
+                .add_filter("Plain text", &["txt"])
                 .add_filter("All files", &["*"])
                 .pick_file();
             let _ = tx.send(path);
@@ -586,14 +592,38 @@ impl eframe::App for Reader {
                                 )
                                 .map(|u| u.to_string())
                                 .unwrap_or_else(|_| "file:///".into());
+                                let attachments = self.attachments.clone();
+                                let attachment_base = url::Url::parse(&base).unwrap();
+                                let render_attachment =
+                                    move |ui: &mut egui::Ui, destination: &str, title: &str| {
+                                        attachments.borrow_mut().render(
+                                            ui,
+                                            &attachment_base,
+                                            destination,
+                                            title,
+                                        )
+                                    };
                                 let viewer = CommonMarkViewer::new()
+                                    .render_attachment_fn(Some(&render_attachment))
                                     .line_height(
                                         self.preferences.size * self.preferences.line_height,
                                     )
                                     .paragraph_spacing(self.preferences.paragraph_gap)
                                     .default_implicit_uri_scheme(base)
                                     .max_image_width(Some(width as usize));
-                                report = viewer.show_with_report(ui, &mut self.cache, &doc.text).1;
+                                report = if doc
+                                    .path
+                                    .extension()
+                                    .is_some_and(|ext| ext.eq_ignore_ascii_case("txt"))
+                                {
+                                    egui_commonmark::show_plain_text(
+                                        ui,
+                                        &doc.text,
+                                        self.preferences.size * self.preferences.line_height,
+                                    )
+                                } else {
+                                    viewer.show_with_report(ui, &mut self.cache, &doc.text).1
+                                };
                                 ui.add_space(40.0);
                             });
                         });
@@ -614,7 +644,7 @@ impl eframe::App for Reader {
                     ui.add_space((ui.available_height() * 0.25).max(20.0));
                     ui.heading("A quiet place to read.");
                     ui.add_space(12.0);
-                    ui.label("Open a Markdown document, or drop one here.");
+                    ui.label("Open a Markdown or plain-text document, or drop one here.");
                     ui.add_space(20.0);
                     if ui.button("Open a document…").clicked() {
                         self.choose(&ctx);
@@ -636,6 +666,86 @@ impl eframe::App for Reader {
 #[cfg(test)]
 mod rendering_tests {
     use super::*;
+    #[test]
+    fn plain_text_preserves_markup_whitespace_and_source_locations() {
+        let ctx = egui::Context::default();
+        let text = "# Heading\n\n  **literal** [link](file.md)\n\tindented 日本語\n";
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let report = egui_commonmark::show_plain_text(ui, text, 24.0);
+                assert_eq!(report.runs.len(), 1);
+                let run = &report.runs[0];
+                assert_eq!(run.galley.text(), text);
+                assert_eq!(run.source, 0..text.len());
+                assert_eq!(run.heading, None);
+                assert!(run.galley.rows.len() >= 5);
+            });
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn table_cells_wrap_and_rows_grow_to_contain_text() {
+        let text = "| Topic | Decision |\n|---|---|\n| Game data | `QUAKE_BASEDIR` env var (default: the `vkQuake directory with maps` symlink). Data-dependent tests skip when absent. |\n| A much longer topic | Short decision |\n";
+        for width in [360.0, 500.0, 700.0] {
+            for size in [14.0, 24.0, 32.0] {
+                let ctx = egui::Context::default();
+                let mut cache = CommonMarkCache::default();
+                for _ in 0..3 {
+                    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        ui.set_width(width);
+                        ui.style_mut().override_font_id = Some(egui::FontId::proportional(size));
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                        let (response, report) =
+                            CommonMarkViewer::new().show_with_report(ui, &mut cache, text);
+                        assert!(response.response.rect.width() <= width + 1.0);
+                        let decision = report
+                            .runs
+                            .iter()
+                            .find(|r| r.galley.text().starts_with("QUAKE_BASEDIR"))
+                            .unwrap();
+                        assert!(decision.galley.rows.len() > 1);
+                        assert!(decision.galley.text().ends_with("skip when absent."));
+                        let following = report
+                            .runs
+                            .iter()
+                            .find(|r| r.galley.text() == "Short decision")
+                            .unwrap();
+                        assert!(following.pos.y >= decision.pos.y + decision.galley.size().y);
+                        let topic = report
+                            .runs
+                            .iter()
+                            .find(|r| r.galley.text() == "Topic")
+                            .unwrap();
+                        let header = report
+                            .runs
+                            .iter()
+                            .find(|r| r.galley.text() == "Decision")
+                            .unwrap();
+                        for run in &report.runs {
+                            let second = run.pos.x >= header.pos.x - 1.0;
+                            let limit = if second {
+                                header.pos.x + header.pos.x - topic.pos.x
+                            } else {
+                                header.pos.x
+                            };
+                            for row in &run.galley.rows {
+                                for glyph in &row.glyphs {
+                                    if !glyph.chr.is_whitespace() {
+                                        assert!(
+                                            run.pos.x + row.pos.x + glyph.max_x() <= limit + 1.0
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    output.textures_delta.clear();
+                }
+            }
+        }
+    }
+
     fn height(text: &str, line: f32, gap: f32) -> f32 {
         let ctx = egui::Context::default();
         let mut cache = CommonMarkCache::default();

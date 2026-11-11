@@ -13,6 +13,7 @@ chrono = "0.4"
 regex = "1"
 url = "2"
 fontdb = "0.24"
+libloading = "0.8.9"
 serde = { version = "1", features = ["derive"] }
 
 [lints.clippy]

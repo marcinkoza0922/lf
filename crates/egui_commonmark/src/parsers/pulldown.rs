@@ -485,43 +485,130 @@ impl CommonMarkViewerInternal {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 let Table { header, rows } = parse_table(events);
 
-                egui::Grid::new(id).striped(true).show(ui, |ui| {
-                    for col in header {
-                        ui.horizontal(|ui| {
-                            for (e, src_span) in col {
-                                let tmp_start =
-                                    std::mem::replace(&mut self.line.should_start_newline, false);
-                                let tmp_end =
-                                    std::mem::replace(&mut self.line.should_end_newline, false);
-                                self.event(ui, e, src_span, cache, options, max_width);
-                                self.line.should_start_newline = tmp_start;
-                                self.line.should_end_newline = tmp_end;
+                let columns = header.len().max(1);
+                let cell_width = ((ui.available_width().min(max_width)
+                    - ui.spacing().item_spacing.x * columns.saturating_sub(1) as f32)
+                    / columns as f32)
+                    .max(1.0);
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                egui::Grid::new(id)
+                    .striped(true)
+                    .spacing(egui::vec2(ui.spacing().item_spacing.x, 6.0))
+                    .min_col_width(cell_width)
+                    .max_col_width(cell_width)
+                    .show(ui, |ui| {
+                        for row in std::iter::once(header).chain(rows) {
+                            for col in row {
+                                let text_only = col.iter().all(|(event, _)| {
+                                    matches!(
+                                        event,
+                                        pulldown_cmark::Event::Text(_)
+                                            | pulldown_cmark::Event::Code(_)
+                                            | pulldown_cmark::Event::SoftBreak
+                                            | pulldown_cmark::Event::HardBreak
+                                            | pulldown_cmark::Event::Start(
+                                                pulldown_cmark::Tag::TableCell
+                                                    | pulldown_cmark::Tag::TableHead
+                                                    | pulldown_cmark::Tag::TableRow
+                                                    | pulldown_cmark::Tag::Strong
+                                                    | pulldown_cmark::Tag::Emphasis
+                                                    | pulldown_cmark::Tag::Strikethrough
+                                            )
+                                            | pulldown_cmark::Event::End(
+                                                pulldown_cmark::TagEnd::TableCell
+                                                    | pulldown_cmark::TagEnd::Strong
+                                                    | pulldown_cmark::TagEnd::Emphasis
+                                                    | pulldown_cmark::TagEnd::Strikethrough
+                                            )
+                                    )
+                                });
+                                ui.vertical(|ui| {
+                                    ui.set_width(cell_width);
+                                    if text_only {
+                                        // Lay out every formatting span together. Separate labels
+                                        // can enlarge a wrapping UI before the next span is placed.
+                                        let mut job = egui::text::LayoutJob::default();
+                                        let mut source: Option<Range<usize>> = None;
+                                        for (event, span) in col {
+                                            let (text, code) = match event {
+                                                pulldown_cmark::Event::Text(text) => {
+                                                    (Some(text), false)
+                                                }
+                                                pulldown_cmark::Event::Code(text) => {
+                                                    (Some(text), true)
+                                                }
+                                                pulldown_cmark::Event::SoftBreak => {
+                                                    (Some(" ".into()), false)
+                                                }
+                                                pulldown_cmark::Event::HardBreak => {
+                                                    (Some("\n".into()), false)
+                                                }
+                                                other => {
+                                                    if !matches!(
+                                                        other,
+                                                        pulldown_cmark::Event::Start(
+                                                            pulldown_cmark::Tag::TableCell
+                                                        ) | pulldown_cmark::Event::End(
+                                                            pulldown_cmark::TagEnd::TableCell
+                                                        )
+                                                    ) {
+                                                        self.event(
+                                                            ui, other, span, cache, options,
+                                                            cell_width,
+                                                        );
+                                                    }
+                                                    continue;
+                                                }
+                                            };
+                                            if let Some(text) = text {
+                                                source = Some(source.map_or(span.clone(), |old| {
+                                                    old.start..span.end
+                                                }));
+                                                self.text_style.code = code;
+                                                self.text_style
+                                                    .to_richtext(ui, &text)
+                                                    .line_height(self.line_height)
+                                                    .append_to(
+                                                        &mut job,
+                                                        ui.style(),
+                                                        egui::FontSelection::Default,
+                                                        ui.text_valign(),
+                                                    );
+                                                self.text_style.code = false;
+                                            }
+                                        }
+                                        if let Some(source) = source {
+                                            egui_commonmark_backend::report::location(
+                                                ui.ctx(),
+                                                source,
+                                                self.heading_id,
+                                            );
+                                            egui_commonmark_backend::report::label(ui, job);
+                                        }
+                                    } else {
+                                        ui.horizontal_wrapped(|ui| {
+                                            for (e, src_span) in col {
+                                                let tmp_start = std::mem::replace(
+                                                    &mut self.line.should_start_newline,
+                                                    false,
+                                                );
+                                                let tmp_end = std::mem::replace(
+                                                    &mut self.line.should_end_newline,
+                                                    false,
+                                                );
+                                                self.event(
+                                                    ui, e, src_span, cache, options, cell_width,
+                                                );
+                                                self.line.should_start_newline = tmp_start;
+                                                self.line.should_end_newline = tmp_end;
+                                            }
+                                        });
+                                    }
+                                });
                             }
-                        });
-                    }
-
-                    ui.end_row();
-
-                    for row in rows {
-                        for col in row {
-                            ui.horizontal(|ui| {
-                                for (e, src_span) in col {
-                                    let tmp_start = std::mem::replace(
-                                        &mut self.line.should_start_newline,
-                                        false,
-                                    );
-                                    let tmp_end =
-                                        std::mem::replace(&mut self.line.should_end_newline, false);
-                                    self.event(ui, e, src_span, cache, options, max_width);
-                                    self.line.should_start_newline = tmp_start;
-                                    self.line.should_end_newline = tmp_end;
-                                }
-                            });
+                            ui.end_row();
                         }
-
-                        ui.end_row();
-                    }
-                });
+                    });
             });
 
             self.is_table = false;

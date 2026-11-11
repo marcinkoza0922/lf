@@ -76,10 +76,12 @@ use egui::{self, Id};
 
 mod parsers;
 
+pub use egui_commonmark_backend::RenderAttachmentFn;
 pub use egui_commonmark_backend::RenderHtmlFn;
 pub use egui_commonmark_backend::RenderMathFn;
 pub use egui_commonmark_backend::alerts::{Alert, AlertBundle};
 pub use egui_commonmark_backend::misc::CommonMarkCache;
+pub use egui_commonmark_backend::report::label as attachment_label;
 pub use egui_commonmark_backend::report::{RenderReport, TextRun};
 
 #[cfg(feature = "better_syntax_highlighting")]
@@ -233,8 +235,14 @@ impl<'f> CommonMarkViewer<'f> {
         self
     }
 
-    /// Allows custom handling of html. Enabling this will disable plain text rendering
-    /// of html blocks. Nodes are included in the provided text
+    /// Let the application render link/image destinations as attachments.
+    /// Return false to retain the normal renderer for that destination.
+    pub fn render_attachment_fn(mut self, func: Option<&'f RenderAttachmentFn>) -> Self {
+        self.options.attachment_fn = func;
+        self
+    }
+
+    /// Allows custom HTML rendering, replacing plain text rendering of HTML blocks.
     pub fn render_html_fn(mut self, func: Option<&'f RenderHtmlFn>) -> Self {
         self.options.html_fn = func;
         self
@@ -401,4 +409,15 @@ impl List {
             newline(ui);
         }
     }
+}
+
+/// Display literal text while retaining selection and source-aware layout reports.
+pub fn show_plain_text(ui: &mut egui::Ui, text: &str, line_height: f32) -> RenderReport {
+    egui_commonmark_backend::report::begin(ui.ctx());
+    egui_commonmark_backend::report::location(ui.ctx(), 0..text.len(), None);
+    egui_commonmark_backend::report::label(
+        ui,
+        egui::RichText::new(text).line_height(Some(line_height)),
+    );
+    egui_commonmark_backend::report::finish(ui.ctx())
 }

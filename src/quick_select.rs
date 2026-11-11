@@ -51,9 +51,9 @@ fn scan(root: &Path, cancelled: &AtomicBool) -> Scan {
             if kind.is_dir() {
                 directories.push(path);
             } else if (kind.is_file() || (kind.is_symlink() && path.is_file()))
-                && path
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                && path.extension().is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("txt")
+                })
             {
                 result
                     .files
@@ -183,7 +183,7 @@ impl QuickSelect {
                 ));
             }
             if result.files.is_empty() {
-                ui.label("No .md files found.");
+                ui.label("No .md or .txt files found.");
             } else if self.matches.is_empty() {
                 ui.label("No matching files.");
             } else {
@@ -317,7 +317,7 @@ mod tests {
             "first.md",
             "nested/first.md",
             "nested/.hidden/UPPER.MD",
-            "skip.txt",
+            "plain.TXT",
             "almost.md.bak",
         ] {
             fs::write(root.join(file), "# test").unwrap();
@@ -328,10 +328,15 @@ mod tests {
             std::os::unix::fs::symlink(root.join("first.md"), root.join("linked.md")).unwrap();
         }
         let result = scan(&root, &AtomicBool::new(false));
-        let mut expected: Vec<PathBuf> = ["first.md", "nested/.hidden/UPPER.MD", "nested/first.md"]
-            .into_iter()
-            .map(PathBuf::from)
-            .collect();
+        let mut expected: Vec<PathBuf> = [
+            "first.md",
+            "nested/.hidden/UPPER.MD",
+            "nested/first.md",
+            "plain.TXT",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
         #[cfg(unix)]
         expected.push(PathBuf::from("linked.md"));
         expected.sort();
