@@ -232,3 +232,9 @@ character nearest the mouse selection's active endpoint, including backward
 drags. Starting keyboard navigation clears the native mouse selection so only
 the keyboard highlight remains. Shift+J/K scrolling does not reveal a hidden
 highlight.
+
+Highlight overlays for the reading cursor, keyboard selection, search matches,
+and headings merge adjacent glyph rectangles into continuous line spans before
+painting. This removes internal rounded corners and repeated translucent blending
+at kerning overlaps in proportional fonts. Small layout rounding gaps are joined;
+wrapped lines and separated columns retain independent spans.

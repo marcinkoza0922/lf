@@ -8,6 +8,24 @@ pub(crate) struct Glyph {
     source: usize,
     heading: Option<usize>,
 }
+/// Paint each contiguous line span once, avoiding rounded glyph seams and
+/// repeated alpha blending where proportional glyph advances overlap.
+pub(crate) fn highlight_rects(rects: impl IntoIterator<Item = Rect>) -> Vec<Rect> {
+    let mut spans: Vec<Rect> = Vec::new();
+    for rect in rects {
+        if let Some(last) = spans.last_mut()
+            && (last.center().y - rect.center().y).abs() < last.height().min(rect.height()) * 0.5
+            && rect.left() >= last.left()
+            && rect.left() <= last.right() + 2.0
+        {
+            *last = last.union(rect);
+        } else {
+            spans.push(rect);
+        }
+    }
+    spans
+}
+
 #[derive(Default)]
 pub struct TextIndex {
     pub text: String,
@@ -60,11 +78,12 @@ impl TextIndex {
         index
     }
     fn rects(&self, range: &Range<usize>) -> Vec<Rect> {
-        self.glyphs
-            .iter()
-            .filter(|g| g.bytes.start < range.end && g.bytes.end > range.start)
-            .map(|g| g.rect)
-            .collect()
+        highlight_rects(
+            self.glyphs
+                .iter()
+                .filter(|g| g.bytes.start < range.end && g.bytes.end > range.start)
+                .map(|g| g.rect),
+        )
     }
     fn match_rect(&self, range: &Range<usize>) -> Option<Rect> {
         self.rects(range).into_iter().reduce(Rect::union)
@@ -370,9 +389,15 @@ impl Search {
             }
         }
         if let Some(id) = self.heading {
-            for glyph in index.glyphs.iter().filter(|g| g.heading == Some(id)) {
+            for rect in highlight_rects(
+                index
+                    .glyphs
+                    .iter()
+                    .filter(|g| g.heading == Some(id))
+                    .map(|g| g.rect),
+            ) {
                 ui.painter().rect_filled(
-                    glyph.rect,
+                    rect,
                     1.0,
                     Color32::from_rgba_unmultiplied(60, 210, 210, 85),
                 );
@@ -408,6 +433,26 @@ pub fn find_matches(text: &str, query: &str) -> Vec<Range<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn highlight_spans_join_variable_width_glyphs_but_keep_lines_and_columns_separate() {
+        let rect = |x, y, w, h| Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
+        let spans = highlight_rects([
+            rect(0.0, 0.0, 3.0, 16.0),
+            rect(2.5, 0.0, 12.0, 16.0),  // kerning overlap
+            rect(15.0, 1.0, 4.0, 14.0),  // rounding gap and inline font change
+            rect(0.0, 20.0, 7.0, 16.0),  // soft wrap
+            rect(50.0, 20.0, 5.0, 16.0), // separate table column
+        ]);
+        assert_eq!(
+            spans,
+            vec![
+                rect(0.0, 0.0, 19.0, 16.0),
+                rect(0.0, 20.0, 7.0, 16.0),
+                rect(50.0, 20.0, 5.0, 16.0),
+            ]
+        );
+    }
+
     #[test]
     fn option_shortcuts_are_scoped_and_consume_toggle_keys() {
         let ctx = egui::Context::default();

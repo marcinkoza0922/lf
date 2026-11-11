@@ -477,14 +477,9 @@ impl ReadingCursor {
             start = anchor.min(self.position).min(chars.len() - 1);
             end = (anchor.max(self.position) + 1).min(chars.len());
         }
-        for p in start..end {
-            if let Some(r) = rect(p) {
-                ui.painter().rect_filled(
-                    r,
-                    1.0,
-                    ui.visuals().selection.bg_fill.gamma_multiply(0.45),
-                );
-            }
+        for r in crate::text_search::highlight_rects((start..end).filter_map(rect)) {
+            ui.painter()
+                .rect_filled(r, 1.0, ui.visuals().selection.bg_fill.gamma_multiply(0.45));
         }
         if moved && let Some(r) = rect(self.position) {
             ui.scroll_to_rect_animation(r, None, egui::style::ScrollAnimation::none());
