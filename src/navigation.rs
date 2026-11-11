@@ -18,6 +18,11 @@ pub struct Navigator {
 }
 
 impl Navigator {
+    pub fn word_end_reserved(&self, ctx: &egui::Context) -> bool {
+        self.pending_g
+            .is_some_and(|time| ctx.input(|i| (0.0..=1.0).contains(&(i.time - time))))
+    }
+
     pub fn reset(&mut self) {
         self.pending_g = None;
     }

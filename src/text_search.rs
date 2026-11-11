@@ -2,16 +2,16 @@ use eframe::egui::{self, Color32, Rect};
 use egui_commonmark::RenderReport;
 use std::ops::Range;
 
-struct Glyph {
-    bytes: Range<usize>,
-    rect: Rect,
+pub(crate) struct Glyph {
+    pub(crate) bytes: Range<usize>,
+    pub(crate) rect: Rect,
     source: usize,
     heading: Option<usize>,
 }
 #[derive(Default)]
 pub struct TextIndex {
     pub text: String,
-    glyphs: Vec<Glyph>,
+    pub(crate) glyphs: Vec<Glyph>,
     pub headings: Vec<(usize, Rect)>,
 }
 impl TextIndex {
@@ -84,6 +84,10 @@ pub struct Search {
     pub source_target: Option<usize>,
     jump: bool,
     previous_query: String,
+    case_sensitive: bool,
+    fuzzy: bool,
+    regex: bool,
+    previous_options: (bool, bool, bool),
     move_match: Option<bool>,
 }
 impl Search {
@@ -103,6 +107,7 @@ impl Search {
         self.source_target = Some(source);
         self.jump = true;
     }
+    #[cfg(test)]
     pub fn needs_report(&self) -> bool {
         !self.query.is_empty() || self.heading.is_some() || self.heading_step.is_some()
     }
@@ -131,6 +136,28 @@ impl Search {
         }
         open
     }
+    pub fn option_shortcuts(&mut self, ctx: &egui::Context) {
+        if !self.open {
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::I)) {
+            self.case_sensitive = !self.case_sensitive;
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::U)) {
+            self.fuzzy = !self.fuzzy;
+            if self.fuzzy {
+                self.regex = false;
+            }
+        }
+        if ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::R)
+        }) {
+            self.regex = !self.regex;
+            if self.regex {
+                self.fuzzy = false;
+            }
+        }
+    }
     pub fn shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.text_edit_focused() || self.query.is_empty() {
             return;
@@ -147,23 +174,32 @@ impl Search {
         let next = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         ui.horizontal(|ui| {
             ui.label("Find");
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.query)
-                    .id(egui::Id::new("document-search-input"))
-                    .hint_text("Search document…")
-                    .desired_width(240.0),
-            );
+            let mut output = egui::TextEdit::singleline(&mut self.query)
+                .id(egui::Id::new("document-search-input"))
+                .hint_text("Search document…")
+                .desired_width(240.0)
+                .show(ui);
+            let response = &output.response;
             if self.focus {
                 response.request_focus();
+                output
+                    .state
+                    .cursor
+                    .set_char_range(Some(egui::text::CCursorRange::two(
+                        egui::text::CCursor::new(0),
+                        egui::text::CCursor::new(self.query.chars().count()),
+                    )));
+                output.state.store(&ctx, response.id);
                 self.focus = false;
             }
             if previous || next {
+                self.open = false;
                 response.surrender_focus();
             }
-            if previous || ui.small_button("Previous").clicked() {
+            if ui.small_button("Previous").clicked() {
                 self.move_match = Some(false);
             }
-            if next || ui.small_button("Next").clicked() {
+            if ui.small_button("Next").clicked() {
                 self.move_match = Some(true);
             }
             ui.label(if self.count == 0 {
@@ -175,11 +211,73 @@ impl Search {
                 self.clear(&ctx);
             }
         });
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.case_sensitive, "Match case (Ctrl+I)");
+            if ui.checkbox(&mut self.fuzzy, "Fuzzy (Ctrl+U)").changed() && self.fuzzy {
+                self.regex = false;
+            }
+            if ui
+                .checkbox(&mut self.regex, "Regex (Ctrl+Shift+R)")
+                .changed()
+                && self.regex
+            {
+                self.fuzzy = false;
+            }
+        });
+        if self.regex
+            && let Err(error) = self.pattern()
+        {
+            ui.colored_label(Color32::LIGHT_RED, error.to_string());
+        }
+    }
+    fn pattern(&self) -> Result<regex::Regex, regex::Error> {
+        regex::RegexBuilder::new(&self.query)
+            .case_insensitive(!self.case_sensitive)
+            .build()
+    }
+    fn matches(&self, text: &str) -> Vec<Range<usize>> {
+        if self.query.is_empty() {
+            return Vec::new();
+        }
+        if self.regex {
+            return self
+                .pattern()
+                .map(|re| {
+                    re.find_iter(text)
+                        .filter(|m| !m.is_empty())
+                        .map(|m| m.range())
+                        .collect()
+                })
+                .unwrap_or_default();
+        }
+        if self.fuzzy {
+            // Ordered subsequences within a line, highlighting the complete matched span.
+            let parts: Vec<String> = self
+                .query
+                .chars()
+                .map(|ch| regex::escape(&ch.to_string()))
+                .collect();
+            let pattern = parts.join("[^\\n]*?");
+            return regex::RegexBuilder::new(&pattern)
+                .case_insensitive(!self.case_sensitive)
+                .build()
+                .map(|re| re.find_iter(text).map(|m| m.range()).collect())
+                .unwrap_or_default();
+        }
+        if self.case_sensitive {
+            text.match_indices(&self.query)
+                .map(|(start, _)| start..start + self.query.len())
+                .collect()
+        } else {
+            find_matches(text, &self.query)
+        }
     }
     pub fn render(&mut self, ui: &egui::Ui, index: &TextIndex, viewport_top: f32) {
-        let matches = find_matches(&index.text, &self.query);
+        let matches = self.matches(&index.text);
         self.count = matches.len();
-        if self.previous_query != self.query {
+        let options = (self.case_sensitive, self.fuzzy, self.regex);
+        if self.previous_query != self.query || self.previous_options != options {
+            self.previous_options = options;
             self.previous_query = self.query.clone();
             self.active = 0;
             self.jump = true;
@@ -311,6 +409,88 @@ pub fn find_matches(text: &str, query: &str) -> Vec<Range<usize>> {
 mod tests {
     use super::*;
     #[test]
+    fn option_shortcuts_are_scoped_and_consume_toggle_keys() {
+        let ctx = egui::Context::default();
+        let mut search = Search::default();
+        let press = |search: &mut Search, key, modifiers| {
+            let mut consumed = false;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |ui| {
+                    search.option_shortcuts(ui.ctx());
+                    consumed = !ui.input_mut(|i| i.consume_key(modifiers, key));
+                },
+            );
+            output.textures_delta.clear();
+            consumed
+        };
+        assert!(!press(
+            &mut search,
+            egui::Key::R,
+            egui::Modifiers::CTRL | egui::Modifiers::SHIFT
+        ));
+        assert!(!search.regex);
+        search.begin();
+        assert!(!press(&mut search, egui::Key::X, egui::Modifiers::CTRL));
+        assert!(!press(&mut search, egui::Key::R, egui::Modifiers::CTRL));
+        assert!(press(
+            &mut search,
+            egui::Key::R,
+            egui::Modifiers::CTRL | egui::Modifiers::SHIFT
+        ));
+        assert!(search.regex);
+        assert!(press(&mut search, egui::Key::U, egui::Modifiers::CTRL));
+        assert!(search.fuzzy && !search.regex);
+        assert!(press(
+            &mut search,
+            egui::Key::R,
+            egui::Modifiers::CTRL | egui::Modifiers::SHIFT
+        ));
+        assert!(search.regex && !search.fuzzy);
+        assert!(press(
+            &mut search,
+            egui::Key::R,
+            egui::Modifiers::CTRL | egui::Modifiers::SHIFT
+        ));
+        assert!(!search.regex);
+        assert!(press(&mut search, egui::Key::I, egui::Modifiers::CTRL));
+        assert!(search.case_sensitive);
+        assert!(press(&mut search, egui::Key::I, egui::Modifiers::CTRL));
+        assert!(!search.case_sensitive);
+    }
+    #[test]
+    fn matching_options_and_invalid_regex() {
+        let mut search = Search {
+            query: "Écho".into(),
+            ..Default::default()
+        };
+        assert_eq!(search.matches("Écho écho").len(), 2);
+        search.case_sensitive = true;
+        assert_eq!(search.matches("Écho écho"), vec![0..5]);
+        search.query = "nle".into();
+        search.fuzzy = true;
+        assert_eq!(search.matches("needle\nneedle"), vec![0..6, 7..13]);
+        assert!(search.matches("n\nle").is_empty());
+        search.fuzzy = false;
+        search.regex = true;
+        search.query = "n[a-z]+".into();
+        assert_eq!(search.matches("needle"), vec![0..6]);
+        search.query = "[".into();
+        assert!(search.pattern().is_err());
+        assert!(search.matches("needle").is_empty());
+        search.query = "^".into();
+        assert!(search.matches("needle").is_empty());
+    }
+    #[test]
     fn literal_unicode_matching_preserves_original_byte_ranges() {
         let text = "Écho éCHO 日本語 [x]";
         let matches = find_matches(text, "écho");
@@ -401,6 +581,44 @@ mod tests {
         assert!(!search.needs_report());
     }
     #[test]
+    fn reopening_search_selects_existing_unicode_query_for_replacement() {
+        let ctx = egui::Context::default();
+        let mut search = Search::default();
+        let frame = |search: &mut Search, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    if search.open {
+                        egui::CentralPanel::default().show(ui, |ui| search.bar(ui));
+                    }
+                },
+            );
+            output.textures_delta.clear();
+        };
+        search.begin();
+        frame(&mut search, vec![]);
+        frame(&mut search, vec![egui::Event::Text("Écho 日本語".into())]);
+        frame(
+            &mut search,
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(!search.open);
+        assert_eq!(search.query, "Écho 日本語");
+        search.begin();
+        frame(&mut search, vec![]);
+        frame(&mut search, vec![egui::Event::Text("replacement".into())]);
+        assert_eq!(search.query, "replacement");
+    }
+    #[test]
     fn slash_opens_and_reopens_search_on_shifted_keyboard_layouts() {
         let ctx = egui::Context::default();
         let mut search = Search::default();
@@ -440,7 +658,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_releases_search_focus_and_n_navigates_matches() {
+    fn enter_closes_search_without_advancing_and_n_navigates_matches() {
         let ctx = egui::Context::default();
         let mut search = Search::default();
         search.begin();
@@ -467,6 +685,18 @@ mod tests {
             modifiers: egui::Modifiers::NONE,
         }]);
         send(vec![egui::Event::Text(" more".into())]);
+        drop(send);
+        assert!(!search.open);
+        assert!(search.move_match.is_none());
+        let mut send = |events| {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| search.shortcuts(ui.ctx()),
+            );
+        };
         assert!(!ctx.text_edit_focused());
         send(vec![egui::Event::Key {
             key: egui::Key::N,

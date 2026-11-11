@@ -77,7 +77,7 @@ listed in `crates/egui_commonmark/PATCHES.md`.
 
 ## Quick select
 
-Press F (outside text/numeric entry) or use Quick select in the toolbar to list
+Press Space (outside text/numeric entry) or use Quick select in the toolbar to list
 all `.md` files recursively under the launch directory, captured once at startup.
 Opening documents in other directories never changes this root. Paths are shown
 relative to this root and sorted. Hidden directories are included; directory
@@ -102,7 +102,10 @@ empty matches, and Escape dismissal. Clippy and formatting checks pass.
 
 Arrow Up/Down and K/J move vertically by one reading line; Left/Right and H/L
 move horizontally when wide content overflows. The document scroll area supports
-both axes while prose continues wrapping to the reading width. Page Up/Down move
+both axes while prose continues wrapping to the reading width. The reading
+column is centered using the scroll viewport width, with 12-point minimum side
+margins, independent of overflowing content. Prose explicitly uses word wrapping
+(including long words) within that column. Page Up/Down move
 90% of the visible document height, retaining context. Home and `gg` go to the
 top; End, Shift+G, and `ge` go to the bottom. Two-key sequences have a one-second
 window, ignore held-G repeats, and reset on unrelated keys, opening a new document,
@@ -114,12 +117,24 @@ headless scroll offsets, including short documents and overflow on both axes.
 
 ## Search and heading navigation
 
-`/` and Ctrl+F open case-insensitive literal search over rendered document text.
+`/` and Ctrl+F open a centered, nonmodal search window over rendered document text.
+Search defaults to case-insensitive literal matching. Match case, Fuzzy, and Regex
+checkboxes control matching; fuzzy and regex are mutually exclusive. While the
+search window is open, Ctrl+I toggles Match case, Ctrl+U toggles Fuzzy, and Ctrl+Shift+R
+toggles Regex, including during text entry. These keys are consumed before global
+shortcuts; Ctrl+X retains its cut behavior and Ctrl+R reloads normally. Copy and Ctrl+F retain
+their existing behavior. Fuzzy uses
+ordered subsequences within a line and highlights the complete matched span. Regex
+uses the Rust regex engine, shows invalid-pattern errors inline, and ignores
+zero-width matches. Changing options resets the active match just like changing
+the query.
 The slash shortcut accepts character events as well as Slash key events, including
 keyboard layouts where typing `/` requires Shift, and consumes the opening
 character so it does not enter the query.
 All occurrences receive translucent amber highlights, with the active occurrence
-in orange. Enter/Shift+Enter navigate matches and release search input focus. Outside text
+in orange. Enter/Shift+Enter close the search window and release input focus, preserving
+the query, highlights, and active match. Opening search focuses the input and
+selects the entire existing query, so typing replaces it (including Unicode text). Outside text
 entry, `n`/Shift+N navigate next/previous matches; next/previous controls also
 navigate matches. Escape
 closes search and removes search/heading overlays without modifying user selection.
@@ -150,5 +165,35 @@ formatting-spanning matches, search focus release and match shortcuts, rg/grep p
 filenames, literal query argument handling, and result limits. Twenty-one tests
 pass, with clean clippy and formatting checks. Recursive search is over source
 text; markup-only matches scroll to the closest rendered text when there is no
-visible occurrence to highlight. Renderer reports are collected only while
-search or heading overlays are active.
+visible occurrence to highlight. Renderer reports are collected for the visible reading cursor as well as search
+and heading overlays.
+
+
+## Reading cursor and Vim word motions
+
+The document has a visible caret and a translucent highlight over its current
+word (or punctuation run), independent of mouse selection and search highlights.
+It starts at the first rendered character and resets on opening a new document.
+`w` moves to the next word start, `e` to the next word end, and `b` to the previous
+word start. `W`, `E`, and `B` use whitespace-separated WORDs, including
+punctuation, and highlight the entire current WORD. Unicode letters/numbers and underscores form words; punctuation forms
+separate runs. Boundaries clamp to the document. `ge` retains its existing
+bottom-of-document binding. `0` moves to the first character of the current
+visual line (including leading whitespace), and `$` moves to its last character.
+These motions follow soft wrapping; character events support shifted keyboard
+layouts, and pending `f`/`t`/`F`/`T` targets take precedence.
+
+`f` followed by a character moves onto its next occurrence on the current visual
+line; `t` stops just before it. `F` finds the previous occurrence on the same
+visual line and `T` stops just after that occurrence. Both directions exclude
+the current character. Failed finds leave the cursor in place. Escape
+cancels a pending character target. Target characters are consumed before app
+shortcuts, and motions are suppressed in text controls, appearance controls, and
+modals. Cursor movement scrolls the target into view and preserves clipboard
+selection. Layout reports provide character rectangles across Markdown formatting
+and reflow. After reload the character position is clamped to the current text.
+The Space shortcut opens the fuzzy file finder, freeing `f` for character finds.
+
+Tests cover lowercase and shifted keys, Unicode whitespace and punctuation
+boundaries, pending character input,
+shortcut suppression, and character finds using actual rendered line geometry.

@@ -11,7 +11,7 @@ uses the desktop portal; on KDE install and enable `xdg-desktop-portal` and
 `xdg-desktop-portal-kde` to get KDE's file dialog. No GTK file chooser is bundled.
 `md-reader --help` prints usage.
 
-Press **F** or click **Quick select** to find `.md` files recursively under the
+Press **Space** or click **Quick select** to find `.md` files recursively under the
 **launch directory**, even after opening a document elsewhere. Type a fuzzy query,
 use **Tab / Shift+Tab** to select the next/previous match, **Enter** to open, and
 **Esc** to close. Files appear with relative paths; hidden directories are
@@ -63,3 +63,12 @@ Architecture and confirmed requirements: [docs/DESIGN.md](docs/DESIGN.md).
 
 Licensed under the [Apache License 2.0](LICENSE). Bundled third-party crates
 retain their existing license files.
+
+Reading motions: **w** next word, **e** word end, **b** previous word.
+**f** then a character finds it on the current visual line; **t** stops before it.
+A caret marks the position and the current word is highlighted.
+
+**W**, **E**, and **B** move by whitespace-separated WORDs, including punctuation.
+**F** finds backward on the current visible line; **T** stops just after the target.
+
+**0** moves to the start of the current visible line; **$** moves to its end.

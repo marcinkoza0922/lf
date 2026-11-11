@@ -2,6 +2,7 @@ mod document;
 mod grep_search;
 mod navigation;
 mod quick_select;
+mod reading_cursor;
 mod text_search;
 mod theme;
 
@@ -21,7 +22,7 @@ fn main() -> eframe::Result {
     let first = args.next();
     if first.as_deref().is_some_and(|a| a == "--help" || a == "-h") {
         println!(
-            "md-reader [FILE]\n\nRead Markdown on Wayland. Open: Ctrl+O, reload: R or Ctrl+R, quick select: F.\nFind text: / or Ctrl+F, search all files: S, headings: [ and ].\nDrop a file onto the window to open it. Preferences are saved automatically."
+            "md-reader [FILE]\n\nRead Markdown on Wayland. Open: Ctrl+O, reload: R or Ctrl+R, quick select: Space.\nFind text: / or Ctrl+F, search all files: S, headings: [ and ].\nDrop a file onto the window to open it. Preferences are saved automatically."
         );
         return Ok(());
     }
@@ -52,6 +53,7 @@ struct Reader {
     settings: bool,
     generation: u64,
     navigator: navigation::Navigator,
+    cursor: reading_cursor::ReadingCursor,
     search: text_search::Search,
     grep: Option<grep_search::GrepSearch>,
     quick_select: Option<quick_select::QuickSelect>,
@@ -88,6 +90,7 @@ impl Reader {
             settings: false,
             generation: 0,
             navigator: navigation::Navigator::default(),
+            cursor: reading_cursor::ReadingCursor::default(),
             search: text_search::Search::default(),
             grep: None,
             quick_select: None,
@@ -111,6 +114,7 @@ impl Reader {
                 )));
                 self.navigator.reset();
                 self.search.clear(ctx);
+                self.cursor = reading_cursor::ReadingCursor::default();
                 self.document = Some(document);
                 self.error = None;
                 self.generation = self.generation.wrapping_add(1);
@@ -313,10 +317,20 @@ impl eframe::App for Reader {
         }) {
             self.open(path, &ctx);
         }
+        self.cursor.input(
+            &ctx,
+            self.document.is_some()
+                && self.quick_select.is_none()
+                && self.grep.is_none()
+                && self.picker.is_none()
+                && !ctx.text_edit_focused()
+                && !(self.settings && ctx.egui_wants_keyboard_input()),
+            self.navigator.word_end_reserved(&ctx),
+        );
         if self.quick_select.is_none()
             && self.grep.is_none()
             && !ctx.text_edit_focused()
-            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F))
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space))
         {
             self.quick_select(&ctx);
         }
@@ -329,6 +343,9 @@ impl eframe::App for Reader {
         let no_modal = self.quick_select.is_none() && self.grep.is_none() && self.picker.is_none();
         if no_modal && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.search.clear(&ctx);
+        }
+        if no_modal {
+            self.search.option_shortcuts(&ctx);
         }
         let typing = ctx.text_edit_focused();
         if no_modal && self.document.is_some() && self.search.open_shortcut(&ctx) {
@@ -431,7 +448,7 @@ impl eframe::App for Reader {
                 {
                     self.reload(&ctx);
                 }
-                if ui.button("Quick select (F)").clicked() {
+                if ui.button("Quick select (Space)").clicked() {
                     self.quick_select(&ctx);
                 }
                 ui.separator();
@@ -459,7 +476,11 @@ impl eframe::App for Reader {
             });
         }
         if self.search.open && self.document.is_some() {
-            egui::Panel::top("document-search").show(ui, |ui| self.search.bar(ui));
+            egui::Window::new("Find in document")
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .collapsible(false)
+                .resizable(false)
+                .show(&ctx, |ui| self.search.bar(ui));
         }
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -522,13 +543,17 @@ impl eframe::App for Reader {
                     .id_salt(("document", self.generation))
                     .auto_shrink([false, false])
                     .show_viewport(ui, |ui, viewport| {
-                        let width = ui.available_width().min(self.preferences.width);
-                        let inset = ((ui.available_width() - width) / 2.0).max(0.0);
+                        let width = (viewport.width() - 24.0)
+                            .max(1.0)
+                            .min(self.preferences.width);
+                        let inset = ((viewport.width() - width) / 2.0).max(0.0);
                         let mut report = egui_commonmark::RenderReport::default();
                         ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
                             ui.add_space(inset);
                             ui.vertical(|ui| {
                                 ui.set_width(width);
+                                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                                 ui.add_space(20.0);
                                 let base = url::Url::from_directory_path(
                                     doc.path.parent().unwrap_or(std::path::Path::new("/")),
@@ -542,17 +567,13 @@ impl eframe::App for Reader {
                                     .paragraph_spacing(self.preferences.paragraph_gap)
                                     .default_implicit_uri_scheme(base)
                                     .max_image_width(Some(width as usize));
-                                if self.search.needs_report() {
-                                    report =
-                                        viewer.show_with_report(ui, &mut self.cache, &doc.text).1;
-                                } else {
-                                    viewer.show(ui, &mut self.cache, &doc.text);
-                                }
+                                report = viewer.show_with_report(ui, &mut self.cache, &doc.text).1;
                                 ui.add_space(40.0);
                             });
                         });
                         let index = text_search::TextIndex::new(&report);
                         self.search.render(ui, &index, ui.clip_rect().top());
+                        self.cursor.render(ui, &index);
                         navigation::apply(
                             ui,
                             viewport,
