@@ -51,7 +51,7 @@ fn read(path: &std::path::Path) -> Result<String, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let metadata = file.metadata().map_err(|e| e.to_string())?;
     if !metadata.is_file() {
-        return Err("Choose a regular Markdown file".into());
+        return Err("Choose a regular text file".into());
     }
     if metadata.len() > MAX_BYTES {
         return Err("Document exceeds the 16 MiB limit".into());

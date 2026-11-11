@@ -18,3 +18,8 @@ The upstream MIT and Apache-2.0 licenses are retained alongside the source.
 The application owns persistence and UI controls. Geometry coverage lives in
 `src/main.rs` of the application. This copy is a path dependency, not an
 independent fork intended for publication.
+
+- Add `show_plain_text` for selectable literal text with source-aware reports.
+
+- Add `render_attachment_fn` for application-owned link/image cards and players,
+  and re-export `attachment_label` to retain source-aware text layout reports.

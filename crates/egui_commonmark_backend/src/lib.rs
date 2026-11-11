@@ -35,3 +35,6 @@ pub type RenderMathFn = dyn Fn(&mut egui::Ui, &str, bool);
 pub type RenderHtmlFn = dyn Fn(&mut egui::Ui, &str);
 
 pub mod report;
+
+/// Return true when the application rendered this attachment itself.
+pub type RenderAttachmentFn = dyn Fn(&mut egui::Ui, &str, &str) -> bool;

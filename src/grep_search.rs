@@ -67,6 +67,8 @@ fn command(tool: &str, root: &std::path::Path, query: &str) -> Command {
             "--no-ignore",
             "--glob",
             "*.[mM][dD]",
+            "--glob",
+            "*.[tT][xX][tT]",
         ]);
     } else {
         command.args([
@@ -78,6 +80,7 @@ fn command(tool: &str, root: &std::path::Path, query: &str) -> Command {
             "-F",
             "-I",
             "--include=*.[mM][dD]",
+            "--include=*.[tT][xX][tT]",
         ]);
     }
     command.args(["--", query, "."]);
@@ -293,7 +296,7 @@ impl GrepSearch {
                     .id(id)
                     .lock_focus(true)
                     .desired_width(f32::INFINITY)
-                    .hint_text("Text to find in .md files…"),
+                    .hint_text("Text to find in .md and .txt files…"),
             );
             if self.focus {
                 field.request_focus();

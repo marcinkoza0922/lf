@@ -256,3 +256,68 @@ and headings merge adjacent glyph rectangles into continuous line spans before
 painting. This removes internal rounded corners and repeated translucent blending
 at kerning overlaps in proportional fonts. Small layout rounding gaps are joined;
 wrapped lines and separated columns retain independent spans.
+
+## Plain-text documents
+
+Files with a case-insensitive `.txt` extension render as a selectable literal
+text label, preserving whitespace and markup characters without parsing Markdown
+or activating links. Font, line height, reading width, wrapping, reload, search,
+and reading cursor controls remain available. The local renderer's
+`show_plain_text` helper emits source-aware layout reports, with no headings.
+Quick select and recursive content search include `.txt` alongside `.md` files;
+the native chooser has a separate plain-text filter. The UTF-8 and size limits
+apply to both formats. A headless rendering test checks literal markup,
+whitespace, Unicode, and source locations.
+
+## Attachments and inline playback
+
+`src/attachments.rs` classifies link and image destinations by case-insensitive
+file extension, resolving paths against the current document directory using
+URL joining. Standard Markdown links such as `[Clip](clip.mp4)` and image syntax
+such as `![Audio](track.mp3)` both support attachments. Image destinations render
+inline using the existing image loaders (local images; HTTP image fetching remains
+disabled). Recognized audio/video extensions accept local files and HTTP(S)
+URLs; ordinary web links retain browser behavior. Fragment-only links retain
+normal renderer handling. Other local files, including Markdown and plain text,
+render a card with a generic file icon, label, filename, destination tooltip, and
+an Open in default app button. `xdg-open` runs in a worker with the absolute path
+as one process argument. Missing files and launcher failures show errors on the
+corresponding card. Cards record their label in the renderer's source-aware
+report so document search and reading navigation continue to include link text.
+
+The local renderer exposes `render_attachment_fn` for link/image destinations;
+returning false retains its ordinary rendering. No HTML execution is added.
+
+`src/playback.rs` loads the system `libmpv.so.2` on first playback. On Nobara/Fedora
+install `mpv-libs`; on Debian/Ubuntu install `libmpv2`. Having the `mpv` executable
+alone is insufficient. Missing libraries show an inline error; restart the reader
+after installing the library. The library stays resident for the process lifetime
+to keep dependency thread-local destructors valid. Each player owns a background
+worker and native handles. Its software render context produces 640×360 RGB
+frames, maintaining aspect ratio with letterboxing; egui uploads only the latest
+frame to a texture. This bounded CPU-rendering approach works under Wayland
+without embedding a separate native window. It trades high-resolution/GPU output
+for a small initial implementation; hardware-accelerated rendering can follow.
+The public C ABI bindings are confined to this module and documented with safety
+conditions. Asynchronous commands and event polling avoid synchronous core calls
+after creating the render context, as required by the libmpv render API:
+https://github.com/mpv-player/mpv/blob/master/include/mpv/render.h
+
+Playback is click-to-play, with pause/resume, stop, replay, absolute seek, elapsed
+and total time, and volume. One attachment plays at a time; selecting another,
+opening/reloading a document, or closing the reader disconnects the prior worker
+and frees its renderer before destroying the player. Audio uses the default
+system output, including audio tracks in videos. Player configuration and script
+loading are disabled. Decode/load failures are displayed inline. Playback can
+continue while scrolled out of view. Plain-text documents never activate these
+attachment controls.
+
+Headless tests check classification, relative/encoded paths, retained ordinary
+links, card rendering, and label reports. Two optional backend tests generate
+short fixtures with `ffmpeg`, use a silent audio sink, and verify decoding,
+pause/resume, seeking, EOF/replay, actual video pixels, and missing-file errors.
+With libmpv installed, run them using
+`cargo nextest run --run-ignored ignored-only -E 'test(playback::tests)'`.
+These passed using a temporary extracted libmpv package and `LD_LIBRARY_PATH`,
+without installing system packages. Audible output and interactive visual layout
+have not been manually verified.

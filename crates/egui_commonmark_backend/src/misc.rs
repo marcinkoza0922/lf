@@ -32,6 +32,7 @@ pub struct CommonMarkOptions<'f> {
     /// Whether to present a mutable ui for things like checkboxes
     pub mutable: bool,
     pub math_fn: Option<&'f crate::RenderMathFn>,
+    pub attachment_fn: Option<&'f crate::RenderAttachmentFn>,
     pub html_fn: Option<&'f crate::RenderHtmlFn>,
     /// Whether to enable scrolling to headings by their ID.
     /// To give a heading an ID, use the syntax `# Heading {#myheadingid}`. Then links to `#myheadingid` e.g. `[click me!](#myheadingid)` will scroll to that heading.
@@ -79,6 +80,7 @@ impl Default for CommonMarkOptions<'_> {
             mutable: false,
             math_fn: None,
             html_fn: None,
+            attachment_fn: None,
             enable_scroll_to_heading: false,
         }
     }
@@ -224,6 +226,11 @@ impl Link {
                 egui::Align::LEFT,
             );
         }
+        if let Some(render) = options.attachment_fn
+            && render(ui, &destination, &layout_job.text)
+        {
+            return;
+        }
         let response = crate::report::link(ui, layout_job);
         if cache.link_hooks().contains_key(&destination) {
             if response.clicked() || response.middle_clicked() {
@@ -277,6 +284,12 @@ impl Image {
     }
 
     pub fn end(self, ui: &mut Ui, options: &CommonMarkOptions) {
+        let title: String = self.alt_text.iter().map(|text| text.text()).collect();
+        if let Some(render) = options.attachment_fn
+            && render(ui, &self.uri, &title)
+        {
+            return;
+        }
         let response = ui.add(
             egui::Image::from_uri(&self.uri)
                 .fit_to_original_size(1.0)
