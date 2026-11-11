@@ -60,3 +60,6 @@ cargo fmt --check
 ```
 
 Architecture and confirmed requirements: [docs/DESIGN.md](docs/DESIGN.md).
+
+Licensed under the [Apache License 2.0](LICENSE). Bundled third-party crates
+retain their existing license files.
