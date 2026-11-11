@@ -75,6 +75,7 @@ pub fn is_day(hour: u32, start: u32, end: u32) -> bool {
 #[serde(default)]
 pub struct Preferences {
     pub automatic: bool,
+    pub auto_reload: bool,
     pub manual: Theme,
     pub day: Theme,
     pub night: Theme,
@@ -90,6 +91,7 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             automatic: true,
+            auto_reload: false,
             manual: Theme::Dracula,
             day: Theme::Paper,
             night: Theme::Dracula,

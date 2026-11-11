@@ -9,7 +9,7 @@ integration used by Dolphin), rather than embedding Dolphin itself.
 Basic Markdown only; no math, Mermaid, or executable HTML. Installed system
 fonts, adjustable text size, extra color themes, and preferences persisted
 between launches were confirmed. Automatic day/night themes follow local time.
-Autoreload was explicitly requested after the interview.
+Automatic reload is available as an opt-in reading preference; it defaults to off.
 
 ## Architecture
 
@@ -29,7 +29,13 @@ The file chooser runs in a worker thread and returns through a channel, keeping
 the UI responsive. A single document owns its canonical path, UTF-8 content,
 and error state. Every 500 ms, reread the path and compare contents: this handles
 atomic editor renames, coarse timestamps, deletion/recreation, and same-length
-edits. Keep the last successful render on read errors and retry automatically.
+edits. With automatic reload off (the default, including older saved preferences),
+keep the displayed text and show a nonmodal change prompt with a Reload button.
+The prompt remains while disk contents differ and clears when they match again
+or a reload succeeds. `r` outside text entry and modals, Ctrl+R, and the toolbar
+Reload button read the latest contents. The reading preferences include a persisted
+checkbox to enable automatic reload. Keep the last successful render on read
+errors and retry automatically.
 A 16 MiB document limit bounds work; file loading is synchronous within this
 limit. Scroll identity stays stable across reloads and resets on opening a new
 file. Local image loader caches are cleared on reload. File polling also

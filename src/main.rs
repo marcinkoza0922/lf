@@ -21,7 +21,7 @@ fn main() -> eframe::Result {
     let first = args.next();
     if first.as_deref().is_some_and(|a| a == "--help" || a == "-h") {
         println!(
-            "md-reader [FILE]\n\nRead Markdown on Wayland. Open: Ctrl+O, reload: Ctrl+R, quick select: F.\nFind text: / or Ctrl+F, search all files: S, headings: [ and ].\nDrop a file onto the window to open it. Preferences are saved automatically."
+            "md-reader [FILE]\n\nRead Markdown on Wayland. Open: Ctrl+O, reload: R or Ctrl+R, quick select: F.\nFind text: / or Ctrl+F, search all files: S, headings: [ and ].\nDrop a file onto the window to open it. Preferences are saved automatically."
         );
         return Ok(());
     }
@@ -212,6 +212,10 @@ impl Reader {
     }
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
         ui.heading("Reading preferences");
+        ui.checkbox(
+            &mut self.preferences.auto_reload,
+            "Reload changed documents automatically",
+        );
         ui.add_space(12.0);
         ui.label("Font family");
         egui::ComboBox::from_id_salt("font")
@@ -352,9 +356,19 @@ impl eframe::App for Reader {
                 self.search.heading_step = Some(true);
             }
         }
-        let force_reload = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::R));
-        if force_reload || self.last_poll.elapsed() >= Duration::from_millis(500) {
+        let force_reload = no_modal
+            && (ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::R))
+                || (!typing
+                    && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::R))));
+        if force_reload {
             self.reload(&ctx);
+        }
+        if self.last_poll.elapsed() >= Duration::from_millis(500) {
+            if self.preferences.auto_reload {
+                self.reload(&ctx);
+            } else if let Some(document) = &mut self.document {
+                document.check_for_changes();
+            }
             self.last_poll = Instant::now();
         }
         self.appearance(&ctx);
@@ -412,7 +426,7 @@ impl eframe::App for Reader {
                 }
                 if ui
                     .add_enabled(self.document.is_some(), egui::Button::new("Reload"))
-                    .on_hover_text("Ctrl+R · also reloads automatically")
+                    .on_hover_text("R / Ctrl+R · reload from disk")
                     .clicked()
                 {
                     self.reload(&ctx);
@@ -430,6 +444,20 @@ impl eframe::App for Reader {
             });
             ui.add_space(6.0);
         });
+        if self
+            .document
+            .as_ref()
+            .is_some_and(|document| document.changed)
+        {
+            egui::Panel::top("document-changed").show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("This document has changed on disk. Reload to see the changes?");
+                    if ui.button("Reload (R)").clicked() {
+                        self.reload(&ctx);
+                    }
+                });
+            });
+        }
         if self.search.open && self.document.is_some() {
             egui::Panel::top("document-search").show(ui, |ui| self.search.bar(ui));
         }
@@ -443,8 +471,13 @@ impl eframe::App for Reader {
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.small(format!(
-                        "{} · Autoreload",
-                        self.preferences.theme(chrono::Local::now().hour()).name()
+                        "{} · {}",
+                        self.preferences.theme(chrono::Local::now().hour()).name(),
+                        if self.preferences.auto_reload {
+                            "Auto-reload on"
+                        } else {
+                            "Auto-reload off"
+                        }
                     ));
                 });
             });
@@ -538,7 +571,7 @@ impl eframe::App for Reader {
                         self.choose(&ctx);
                     }
                     ui.add_space(12.0);
-                    ui.weak("Ctrl+O to open · Changes reload automatically");
+                    ui.weak("Ctrl+O to open · R to reload");
                 });
             }
         });

@@ -6,6 +6,7 @@ pub struct Document {
     pub path: PathBuf,
     pub text: String,
     pub error: Option<String>,
+    pub changed: bool,
 }
 
 impl Document {
@@ -16,13 +17,25 @@ impl Document {
             path,
             text,
             error: None,
+            changed: false,
         })
+    }
+
+    pub fn check_for_changes(&mut self) {
+        match read(&self.path) {
+            Ok(text) => {
+                self.error = None;
+                self.changed = text != self.text;
+            }
+            Err(error) => self.error = Some(error),
+        }
     }
 
     pub fn reload(&mut self) -> bool {
         match read(&self.path) {
             Ok(text) => {
                 self.error = None;
+                self.changed = false;
                 if text != self.text {
                     self.text = text;
                     return true;
@@ -95,6 +108,27 @@ mod tests {
         assert!(doc.reload());
         assert!(doc.error.is_none());
     }
+    #[test]
+    fn checking_changes_preserves_reading_until_reload() {
+        let f = Fixture::new();
+        fs::write(f.path(), "first").unwrap();
+        let mut doc = Document::open(f.path()).unwrap();
+        doc.check_for_changes();
+        assert!(!doc.changed);
+        fs::write(f.path(), "second").unwrap();
+        doc.check_for_changes();
+        assert!(doc.changed);
+        assert_eq!(doc.text, "first");
+        fs::write(f.path(), "first").unwrap();
+        doc.check_for_changes();
+        assert!(!doc.changed);
+        fs::write(f.path(), "third").unwrap();
+        doc.check_for_changes();
+        assert!(doc.reload());
+        assert_eq!(doc.text, "third");
+        assert!(!doc.changed);
+    }
+
     #[test]
     fn rejects_invalid_utf8_and_oversized_files() {
         let f = Fixture::new();
