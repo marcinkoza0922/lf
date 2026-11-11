@@ -1,0 +1,4 @@
+[term]
+quiet = true
+color = "never"
+progress.when = "never"

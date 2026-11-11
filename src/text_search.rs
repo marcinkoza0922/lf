@@ -1,0 +1,476 @@
+use eframe::egui::{self, Color32, Rect};
+use egui_commonmark::RenderReport;
+use std::ops::Range;
+
+struct Glyph {
+    bytes: Range<usize>,
+    rect: Rect,
+    source: usize,
+    heading: Option<usize>,
+}
+#[derive(Default)]
+pub struct TextIndex {
+    pub text: String,
+    glyphs: Vec<Glyph>,
+    pub headings: Vec<(usize, Rect)>,
+}
+impl TextIndex {
+    pub fn new(report: &RenderReport) -> Self {
+        let mut index = Self::default();
+        let mut last: Option<Rect> = None;
+        for run in &report.runs {
+            let rect = run.galley.rect.translate(run.pos.to_vec2());
+            if last.is_some_and(|prev| rect.top() > prev.bottom() + 1.0)
+                && !index.text.ends_with(char::is_whitespace)
+            {
+                index.text.push('\n');
+            }
+            let mut local_byte = 0;
+            for row in &run.galley.rows {
+                for glyph in &row.glyphs {
+                    let start = index.text.len();
+                    index.text.push(glyph.chr);
+                    let rect = glyph
+                        .logical_rect()
+                        .translate(run.pos.to_vec2() + row.pos.to_vec2());
+                    index.glyphs.push(Glyph {
+                        bytes: start..index.text.len(),
+                        rect,
+                        source: (run.source.start + local_byte).min(run.source.end),
+                        heading: run.heading,
+                    });
+                    local_byte += glyph.chr.len_utf8();
+                    if let Some(id) = run.heading {
+                        if let Some((_, heading_rect)) =
+                            index.headings.iter_mut().find(|(i, _)| *i == id)
+                        {
+                            *heading_rect = heading_rect.union(rect);
+                        } else {
+                            index.headings.push((id, rect));
+                        }
+                    }
+                }
+                if row.ends_with_newline {
+                    index.text.push('\n');
+                    local_byte += 1;
+                }
+            }
+            last = Some(rect);
+        }
+        index
+    }
+    fn rects(&self, range: &Range<usize>) -> Vec<Rect> {
+        self.glyphs
+            .iter()
+            .filter(|g| g.bytes.start < range.end && g.bytes.end > range.start)
+            .map(|g| g.rect)
+            .collect()
+    }
+    fn match_rect(&self, range: &Range<usize>) -> Option<Rect> {
+        self.rects(range).into_iter().reduce(Rect::union)
+    }
+}
+
+#[derive(Default)]
+pub struct Search {
+    pub open: bool,
+    pub query: String,
+    pub focus: bool,
+    pub active: usize,
+    pub count: usize,
+    pub heading: Option<usize>,
+    heading_anchor: Option<usize>,
+    pub heading_step: Option<bool>,
+    pub source_target: Option<usize>,
+    jump: bool,
+    previous_query: String,
+    move_match: Option<bool>,
+    editing: bool,
+}
+impl Search {
+    pub fn clear(&mut self, ctx: &egui::Context) {
+        *self = Self::default();
+        let id = egui::Id::new("document-search-input");
+        ctx.memory_mut(|m| m.surrender_focus(id));
+    }
+    pub fn begin(&mut self) {
+        self.open = true;
+        self.focus = true;
+        self.heading = None;
+        self.heading_anchor = None;
+    }
+    pub fn target(&mut self, query: String, source: usize) {
+        self.query = query;
+        self.source_target = Some(source);
+        self.jump = true;
+    }
+    pub fn needs_report(&self) -> bool {
+        !self.query.is_empty() || self.heading.is_some() || self.heading_step.is_some()
+    }
+    pub fn bar(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let previous = ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter));
+        let next = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+        if self.editing && (previous || next) {
+            ctx.memory_mut(|m| m.request_focus(egui::Id::new("document-search-input")));
+        }
+        ui.horizontal(|ui| {
+            ui.label("Find");
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.query)
+                    .id(egui::Id::new("document-search-input"))
+                    .hint_text("Search document…")
+                    .desired_width(240.0),
+            );
+            if self.focus {
+                response.request_focus();
+                self.focus = false;
+            }
+            self.editing = response.has_focus();
+            if previous || ui.small_button("Previous").clicked() {
+                self.move_match = Some(false);
+            }
+            if next || ui.small_button("Next").clicked() {
+                self.move_match = Some(true);
+            }
+            ui.label(if self.count == 0 {
+                "0 matches".into()
+            } else {
+                format!("{} / {}", self.active + 1, self.count)
+            });
+            if ui.small_button("Close (Esc)").clicked() {
+                self.clear(&ctx);
+            }
+        });
+    }
+    pub fn render(&mut self, ui: &egui::Ui, index: &TextIndex, viewport_top: f32) {
+        let matches = find_matches(&index.text, &self.query);
+        self.count = matches.len();
+        if self.previous_query != self.query {
+            self.previous_query = self.query.clone();
+            self.active = 0;
+            self.jump = true;
+        }
+        if let Some(source) = self.source_target.take() {
+            if matches.is_empty()
+                && let Some(glyph) = index
+                    .glyphs
+                    .iter()
+                    .min_by_key(|g| g.source.abs_diff(source))
+            {
+                ui.scroll_to_rect_animation(
+                    glyph.rect,
+                    Some(egui::Align::Center),
+                    egui::style::ScrollAnimation::none(),
+                );
+            }
+            if let Some((i, _)) = matches.iter().enumerate().min_by_key(|(_, range)| {
+                index
+                    .glyphs
+                    .iter()
+                    .find(|g| g.bytes.start >= range.start)
+                    .map_or(usize::MAX, |g| g.source.abs_diff(source))
+            }) {
+                self.active = i;
+                self.jump = true;
+            }
+        }
+        if let Some(next) = self.move_match.take()
+            && !matches.is_empty()
+        {
+            self.active = if next {
+                (self.active + 1) % matches.len()
+            } else {
+                (self.active + matches.len() - 1) % matches.len()
+            };
+            self.jump = true;
+        }
+        self.active = self.active.min(matches.len().saturating_sub(1));
+        for (i, range) in matches.iter().enumerate() {
+            let color = if i == self.active {
+                Color32::from_rgba_unmultiplied(255, 140, 0, 100)
+            } else {
+                Color32::from_rgba_unmultiplied(255, 210, 40, 65)
+            };
+            for rect in index.rects(range) {
+                ui.painter().rect_filled(rect, 1.0, color);
+            }
+        }
+        if self.jump {
+            if let Some(rect) = matches.get(self.active).and_then(|r| index.match_rect(r)) {
+                ui.scroll_to_rect_animation(
+                    rect,
+                    Some(egui::Align::Center),
+                    egui::style::ScrollAnimation::none(),
+                );
+            }
+            self.jump = false;
+        }
+        if let Some(next) = self.heading_step.take() {
+            let current = self
+                .heading_anchor
+                .and_then(|id| index.headings.iter().position(|(i, _)| *i == id));
+            let target = if let Some(current) = current {
+                if next {
+                    index.headings.get(current + 1)
+                } else {
+                    current.checked_sub(1).and_then(|i| index.headings.get(i))
+                }
+            } else if next {
+                index
+                    .headings
+                    .iter()
+                    .find(|(_, rect)| rect.top() > viewport_top + 2.0)
+            } else {
+                index
+                    .headings
+                    .iter()
+                    .rev()
+                    .find(|(_, rect)| rect.top() < viewport_top - 2.0)
+            };
+            if let Some((id, rect)) = target {
+                self.heading = Some(*id);
+                self.heading_anchor = Some(*id);
+                ui.scroll_to_rect_animation(
+                    *rect,
+                    Some(egui::Align::TOP),
+                    egui::style::ScrollAnimation::none(),
+                );
+            }
+        }
+        if let Some(id) = self.heading {
+            for glyph in index.glyphs.iter().filter(|g| g.heading == Some(id)) {
+                ui.painter().rect_filled(
+                    glyph.rect,
+                    1.0,
+                    Color32::from_rgba_unmultiplied(60, 210, 210, 85),
+                );
+            }
+        }
+    }
+    pub fn manually_scrolled(&mut self) {
+        self.heading_anchor = None;
+    }
+}
+
+pub fn find_matches(text: &str, query: &str) -> Vec<Range<usize>> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let mut folded = String::new();
+    let mut map = Vec::new();
+    for (start, ch) in text.char_indices() {
+        for lower in ch.to_lowercase() {
+            let begin = folded.len();
+            folded.push(lower);
+            map.resize(folded.len(), start..start + ch.len_utf8());
+            debug_assert!(folded.len() > begin);
+        }
+    }
+    let query = query.to_lowercase();
+    folded
+        .match_indices(&query)
+        .map(|(start, _)| map[start].start..map[start + query.len() - 1].end)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn literal_unicode_matching_preserves_original_byte_ranges() {
+        let text = "Écho éCHO 日本語 [x]";
+        let matches = find_matches(text, "écho");
+        assert_eq!(
+            matches.iter().map(|r| &text[r.clone()]).collect::<Vec<_>>(),
+            vec!["Écho", "éCHO"]
+        );
+        assert_eq!(find_matches(text, "[x]").len(), 1);
+        assert!(find_matches(text, "").is_empty());
+    }
+    #[test]
+    fn highlights_and_escape_preserve_user_drag_selection() {
+        let ctx = egui::Context::default();
+        let mut cache = egui_commonmark::CommonMarkCache::default();
+        let mut search = Search::default();
+        let mut frame = |search: &mut Search, events| {
+            let mut bounds = Rect::NOTHING;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 300.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                        search.clear(ui.ctx());
+                    }
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let (_, report) = egui_commonmark::CommonMarkViewer::new()
+                            .show_with_report(ui, &mut cache, "select this needle");
+                        let index = TextIndex::new(&report);
+                        bounds = index
+                            .glyphs
+                            .iter()
+                            .map(|g| g.rect)
+                            .reduce(Rect::union)
+                            .unwrap();
+                        search.render(ui, &index, 0.0);
+                    });
+                },
+            );
+            let copied = output.platform_output.commands.iter().find_map(|c| {
+                if let egui::OutputCommand::CopyText(text) = c {
+                    Some(text.clone())
+                } else {
+                    None
+                }
+            });
+            output.textures_delta.clear();
+            (bounds, copied)
+        };
+        let bounds = frame(&mut search, vec![]).0;
+        let start = egui::pos2(bounds.left() + 0.1, bounds.center().y);
+        let end = egui::pos2(bounds.right() - 0.1, bounds.center().y);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(
+            &mut search,
+            vec![egui::Event::PointerMoved(start), button(start, true)],
+        );
+        frame(&mut search, vec![egui::Event::PointerMoved(end)]);
+        frame(&mut search, vec![button(end, false)]);
+        let selected = frame(&mut search, vec![egui::Event::Copy]).1.unwrap();
+        assert_eq!(selected, "select this needle");
+        search.query = "needle".into();
+        assert_eq!(
+            frame(&mut search, vec![egui::Event::Copy]).1,
+            Some(selected.clone())
+        );
+        let escape = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        assert_eq!(
+            frame(&mut search, vec![escape, egui::Event::Copy]).1,
+            Some(selected)
+        );
+        assert!(!search.needs_report());
+    }
+    #[test]
+    fn search_keeps_input_focus_after_enter() {
+        let ctx = egui::Context::default();
+        let mut search = Search::default();
+        search.begin();
+        let mut send = |events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| search.bar(ui));
+                },
+            );
+            output.textures_delta.clear();
+        };
+        send(vec![]);
+        send(vec![egui::Event::Text("needle".into())]);
+        send(vec![egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        send(vec![egui::Event::Text(" more".into())]);
+        assert_eq!(search.query, "needle more");
+        search.clear(&ctx);
+        assert!(!search.open);
+        assert!(!ctx.text_edit_focused());
+    }
+    #[test]
+    fn offscreen_match_and_heading_navigation_scroll_actual_document() {
+        let ctx = egui::Context::default();
+        let text = format!(
+            "# First\n\n{}\n\n# Last heading\n\nneedle at the end",
+            "A paragraph of filler.\n\n".repeat(100)
+        );
+        let mut cache = egui_commonmark::CommonMarkCache::default();
+        let mut search = Search::default();
+        let mut frame = |search: &mut Search| {
+            let mut offset = 0.0;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 300.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let out = egui::ScrollArea::vertical().animated(false).show(ui, |ui| {
+                            let (_, report) = egui_commonmark::CommonMarkViewer::new()
+                                .show_with_report(ui, &mut cache, &text);
+                            search.render(ui, &TextIndex::new(&report), ui.clip_rect().top());
+                        });
+                        offset = out.state.offset.y;
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            offset
+        };
+        frame(&mut search);
+        search.heading_step = Some(true);
+        assert!(frame(&mut search) < 20.0);
+        assert_eq!(search.heading, Some(0));
+        search.heading_step = Some(true);
+        assert!(frame(&mut search) > 1000.0);
+        assert_eq!(search.heading, Some(1));
+        search.heading_step = Some(false);
+        assert!(frame(&mut search) < 20.0);
+        search.query = "needle".into();
+        assert!(frame(&mut search) > 1000.0);
+        assert_eq!(search.count, 1);
+        search.clear(&ctx);
+        assert!(!search.needs_report());
+    }
+    #[test]
+    fn report_indexes_offscreen_code_links_and_parsed_headings() {
+        let ctx = egui::Context::default();
+        let text = "# First **heading**\n\nA **formatted** phrase and [link](https://example.com).\n\n```rust\nlet needle = 1;\n# not a heading\n```\n\nSecond\n---\n";
+        let mut cache = egui_commonmark::CommonMarkCache::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let (_, report) =
+                    egui_commonmark::CommonMarkViewer::new().show_with_report(ui, &mut cache, text);
+                let index = TextIndex::new(&report);
+                assert_eq!(index.headings.len(), 2);
+                assert!(index.text.contains("formatted phrase"));
+                assert!(index.text.contains("link"));
+                assert!(index.text.contains("needle"));
+                assert_eq!(find_matches(&index.text, "First heading").len(), 1);
+                let mut search = Search::default();
+                search.target("needle".into(), text.find("needle").unwrap());
+                search.render(ui, &index, 0.0);
+                assert_eq!(search.count, 1);
+                search.clear(ui.ctx());
+                assert!(search.query.is_empty());
+                assert!(search.heading.is_none());
+            });
+        });
+        output.textures_delta.clear();
+    }
+}
