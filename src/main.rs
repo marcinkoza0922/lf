@@ -327,14 +327,8 @@ impl eframe::App for Reader {
             self.search.clear(&ctx);
         }
         let typing = ctx.text_edit_focused();
-        if no_modal
-            && self.document.is_some()
-            && (ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F))
-                || (!typing
-                    && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Slash))))
-        {
+        if no_modal && self.document.is_some() && self.search.open_shortcut(&ctx) {
             self.navigator.reset();
-            self.search.begin();
         }
         if no_modal
             && !typing
@@ -348,6 +342,7 @@ impl eframe::App for Reader {
             }
         }
         if no_modal && !typing {
+            self.search.shortcuts(&ctx);
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::OpenBracket)) {
                 self.navigator.reset();
                 self.search.heading_step = Some(false);

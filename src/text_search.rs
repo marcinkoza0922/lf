@@ -85,7 +85,6 @@ pub struct Search {
     jump: bool,
     previous_query: String,
     move_match: Option<bool>,
-    editing: bool,
 }
 impl Search {
     pub fn clear(&mut self, ctx: &egui::Context) {
@@ -107,13 +106,45 @@ impl Search {
     pub fn needs_report(&self) -> bool {
         !self.query.is_empty() || self.heading.is_some() || self.heading_step.is_some()
     }
+    pub fn open_shortcut(&mut self, ctx: &egui::Context) -> bool {
+        let typing = ctx.text_edit_focused();
+        let open = ctx.input_mut(|input| {
+            let control_f = input.consume_key(egui::Modifiers::CTRL, egui::Key::F);
+            let slash = !typing
+                && (input.consume_key(egui::Modifiers::NONE, egui::Key::Slash)
+                    || (!input.modifiers.ctrl
+                        && !input.modifiers.alt
+                        && !input.modifiers.command
+                        && input
+                            .events
+                            .iter()
+                            .any(|event| matches!(event, egui::Event::Text(text) if text == "/"))));
+            if slash {
+                input
+                    .events
+                    .retain(|event| !matches!(event, egui::Event::Text(text) if text == "/"));
+            }
+            control_f || slash
+        });
+        if open {
+            self.begin();
+        }
+        open
+    }
+    pub fn shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.text_edit_focused() || self.query.is_empty() {
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::N)) {
+            self.move_match = Some(false);
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::N)) {
+            self.move_match = Some(true);
+        }
+    }
     pub fn bar(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let previous = ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter));
         let next = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
-        if self.editing && (previous || next) {
-            ctx.memory_mut(|m| m.request_focus(egui::Id::new("document-search-input")));
-        }
         ui.horizontal(|ui| {
             ui.label("Find");
             let response = ui.add(
@@ -126,7 +157,9 @@ impl Search {
                 response.request_focus();
                 self.focus = false;
             }
-            self.editing = response.has_focus();
+            if previous || next {
+                response.surrender_focus();
+            }
             if previous || ui.small_button("Previous").clicked() {
                 self.move_match = Some(false);
             }
@@ -368,7 +401,46 @@ mod tests {
         assert!(!search.needs_report());
     }
     #[test]
-    fn search_keeps_input_focus_after_enter() {
+    fn slash_opens_and_reopens_search_on_shifted_keyboard_layouts() {
+        let ctx = egui::Context::default();
+        let mut search = Search::default();
+        let key = |key, modifiers| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        for events in [
+            vec![
+                key(egui::Key::Slash, egui::Modifiers::NONE),
+                egui::Event::Text("/".into()),
+            ],
+            vec![
+                key(egui::Key::Num7, egui::Modifiers::SHIFT),
+                egui::Event::Text("/".into()),
+            ],
+        ] {
+            search.clear(&ctx);
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    assert!(search.open_shortcut(ui.ctx()));
+                    egui::CentralPanel::default().show(ui, |ui| search.bar(ui));
+                },
+            );
+            output.textures_delta.clear();
+            assert!(search.open);
+            assert!(ctx.text_edit_focused());
+            assert!(search.query.is_empty());
+        }
+    }
+
+    #[test]
+    fn enter_releases_search_focus_and_n_navigates_matches() {
         let ctx = egui::Context::default();
         let mut search = Search::default();
         search.begin();
@@ -379,6 +451,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
+                    search.shortcuts(ui.ctx());
                     egui::CentralPanel::default().show(ui, |ui| search.bar(ui));
                 },
             );
@@ -394,7 +467,30 @@ mod tests {
             modifiers: egui::Modifiers::NONE,
         }]);
         send(vec![egui::Event::Text(" more".into())]);
-        assert_eq!(search.query, "needle more");
+        assert!(!ctx.text_edit_focused());
+        send(vec![egui::Event::Key {
+            key: egui::Key::N,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        assert_eq!(search.move_match.take(), Some(true));
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::N,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::SHIFT,
+                }],
+                ..Default::default()
+            },
+            |ui| search.shortcuts(ui.ctx()),
+        );
+        assert_eq!(search.move_match.take(), Some(false));
+        assert_eq!(search.query, "needle");
         search.clear(&ctx);
         assert!(!search.open);
         assert!(!ctx.text_edit_focused());

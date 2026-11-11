@@ -109,8 +109,13 @@ headless scroll offsets, including short documents and overflow on both axes.
 ## Search and heading navigation
 
 `/` and Ctrl+F open case-insensitive literal search over rendered document text.
+The slash shortcut accepts character events as well as Slash key events, including
+keyboard layouts where typing `/` requires Shift, and consumes the opening
+character so it does not enter the query.
 All occurrences receive translucent amber highlights, with the active occurrence
-in orange. Enter/Shift+Enter and next/previous controls navigate matches. Escape
+in orange. Enter/Shift+Enter navigate matches and release search input focus. Outside text
+entry, `n`/Shift+N navigate next/previous matches; next/previous controls also
+navigate matches. Escape
 closes search and removes search/heading overlays without modifying user selection.
 `[` and `]` jump to previous/next parsed Markdown headings relative to the current
 viewport, with a separate heading highlight. Headings include setext headings;
@@ -135,7 +140,7 @@ NUL delimiters rather than splitting filenames on punctuation.
 
 Validation for search includes actual drag selection and clipboard copying before
 and after highlighting/Escape, offscreen match and heading scrolling, Unicode and
-formatting-spanning matches, retained search focus, rg/grep parity on unusual
+formatting-spanning matches, search focus release and match shortcuts, rg/grep parity on unusual
 filenames, literal query argument handling, and result limits. Twenty-one tests
 pass, with clean clippy and formatting checks. Recursive search is over source
 text; markup-only matches scroll to the closest rendered text when there is no
