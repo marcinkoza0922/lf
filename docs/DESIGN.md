@@ -321,3 +321,17 @@ With libmpv installed, run them using
 These passed using a temporary extracted libmpv package and `LD_LIBRARY_PATH`,
 without installing system packages. Audible output and interactive visual layout
 have not been manually verified.
+
+## Markdown tables
+
+Table columns share the available reading width, accounting for frame padding and
+column spacing. Cells wrap and rows grow vertically to fit the tallest cell, with a 6-point
+gap between rows.
+Text cells combine prose, inline code, and emphasis into a single formatted text
+layout, preventing individual formatting spans from expanding the cell or
+spilling into the next column. Cells containing links or images retain the
+renderer event path in a wrapping layout. Source-aware reports retain cell text
+for search and reading navigation. Headless geometry coverage checks viewport
+containment, column boundaries, and row heights at 360/500/700-point reading
+widths and 14/24/32-point font sizes with sample Game data cell content.
+Local sample documents in `example/` and `examples/` are ignored by Git.

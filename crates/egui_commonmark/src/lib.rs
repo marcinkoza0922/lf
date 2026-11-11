@@ -76,12 +76,12 @@ use egui::{self, Id};
 
 mod parsers;
 
-pub use egui_commonmark_backend::RenderHtmlFn;
 pub use egui_commonmark_backend::RenderAttachmentFn;
-pub use egui_commonmark_backend::report::label as attachment_label;
+pub use egui_commonmark_backend::RenderHtmlFn;
 pub use egui_commonmark_backend::RenderMathFn;
 pub use egui_commonmark_backend::alerts::{Alert, AlertBundle};
 pub use egui_commonmark_backend::misc::CommonMarkCache;
+pub use egui_commonmark_backend::report::label as attachment_label;
 pub use egui_commonmark_backend::report::{RenderReport, TextRun};
 
 #[cfg(feature = "better_syntax_highlighting")]

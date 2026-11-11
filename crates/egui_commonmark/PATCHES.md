@@ -23,3 +23,7 @@ independent fork intended for publication.
 
 - Add `render_attachment_fn` for application-owned link/image cards and players,
   and re-export `attachment_label` to retain source-aware text layout reports.
+
+- Keep tables within the reading width, wrap cells, and let rows grow vertically.
+  Lay out formatted text cells as one job so inline code and prose share a
+  consistent wrapping boundary.

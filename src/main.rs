@@ -684,6 +684,68 @@ mod rendering_tests {
         output.textures_delta.clear();
     }
 
+    #[test]
+    fn table_cells_wrap_and_rows_grow_to_contain_text() {
+        let text = "| Topic | Decision |\n|---|---|\n| Game data | `QUAKE_BASEDIR` env var (default: the `vkQuake directory with maps` symlink). Data-dependent tests skip when absent. |\n| A much longer topic | Short decision |\n";
+        for width in [360.0, 500.0, 700.0] {
+            for size in [14.0, 24.0, 32.0] {
+                let ctx = egui::Context::default();
+                let mut cache = CommonMarkCache::default();
+                for _ in 0..3 {
+                    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        ui.set_width(width);
+                        ui.style_mut().override_font_id = Some(egui::FontId::proportional(size));
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                        let (response, report) =
+                            CommonMarkViewer::new().show_with_report(ui, &mut cache, text);
+                        assert!(response.response.rect.width() <= width + 1.0);
+                        let decision = report
+                            .runs
+                            .iter()
+                            .find(|r| r.galley.text().starts_with("QUAKE_BASEDIR"))
+                            .unwrap();
+                        assert!(decision.galley.rows.len() > 1);
+                        assert!(decision.galley.text().ends_with("skip when absent."));
+                        let following = report
+                            .runs
+                            .iter()
+                            .find(|r| r.galley.text() == "Short decision")
+                            .unwrap();
+                        assert!(following.pos.y >= decision.pos.y + decision.galley.size().y);
+                        let topic = report
+                            .runs
+                            .iter()
+                            .find(|r| r.galley.text() == "Topic")
+                            .unwrap();
+                        let header = report
+                            .runs
+                            .iter()
+                            .find(|r| r.galley.text() == "Decision")
+                            .unwrap();
+                        for run in &report.runs {
+                            let second = run.pos.x >= header.pos.x - 1.0;
+                            let limit = if second {
+                                header.pos.x + header.pos.x - topic.pos.x
+                            } else {
+                                header.pos.x
+                            };
+                            for row in &run.galley.rows {
+                                for glyph in &row.glyphs {
+                                    if !glyph.chr.is_whitespace() {
+                                        assert!(
+                                            run.pos.x + row.pos.x + glyph.max_x() <= limit + 1.0
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    output.textures_delta.clear();
+                }
+            }
+        }
+    }
+
     fn height(text: &str, line: f32, gap: f32) -> f32 {
         let ctx = egui::Context::default();
         let mut cache = CommonMarkCache::default();
