@@ -10,6 +10,12 @@ enum Motion {
     BigEnd,
     BigBack,
     Find(char, bool, bool),
+    Left,
+    Right,
+    Vertical(bool),
+    Select,
+    Yank,
+    Cancel,
     LineStart,
     LineEnd,
 }
@@ -17,6 +23,11 @@ enum Motion {
 pub struct ReadingCursor {
     position: usize,
     big_word: bool,
+    character_highlight: bool,
+    activated: bool,
+    visible: bool,
+    mouse_origin: Option<egui::Pos2>,
+    anchor: Option<usize>,
     pending: Option<(bool, bool)>,
     motions: Vec<Motion>,
 }
@@ -72,7 +83,7 @@ fn word_motion(chars: &[char], position: usize, motion: Motion) -> usize {
                 p += 1;
             }
         }
-        Motion::Find(..) | Motion::LineStart | Motion::LineEnd => {}
+        _ => {}
     }
     p.min(chars.len() - 1)
 }
@@ -90,8 +101,22 @@ impl ReadingCursor {
                     key: Key::Escape,
                     pressed: true,
                     ..
-                } if self.pending.is_some() => {
+                } => {
                     self.pending = None;
+                    self.motions.push(Motion::Cancel);
+                    true
+                }
+                Event::Copy if self.anchor.is_some() => {
+                    self.motions.push(Motion::Yank);
+                    false
+                }
+                Event::Key {
+                    key: Key::C,
+                    modifiers,
+                    pressed: true,
+                    ..
+                } if modifiers.ctrl && self.anchor.is_some() => {
+                    self.motions.push(Motion::Yank);
                     false
                 }
                 Event::Key {
@@ -104,6 +129,12 @@ impl ReadingCursor {
                         return false;
                     }
                     let motion = match key {
+                        Key::H => Some(Motion::Left),
+                        Key::L => Some(Motion::Right),
+                        Key::J if !modifiers.shift => Some(Motion::Vertical(true)),
+                        Key::K if !modifiers.shift => Some(Motion::Vertical(false)),
+                        Key::V => Some(Motion::Select),
+                        Key::Y => Some(Motion::Yank),
                         Key::W => Some(if modifiers.shift {
                             Motion::BigWord
                         } else {
@@ -153,7 +184,21 @@ impl ReadingCursor {
                     } else {
                         !matches!(
                             text.as_str(),
-                            "w" | "e" | "b" | "f" | "t" | "W" | "E" | "B" | "F" | "T"
+                            "w" | "e"
+                                | "b"
+                                | "f"
+                                | "t"
+                                | "W"
+                                | "E"
+                                | "B"
+                                | "F"
+                                | "T"
+                                | "h"
+                                | "j"
+                                | "k"
+                                | "l"
+                                | "v"
+                                | "y"
                         )
                     }
                 }
@@ -177,13 +222,121 @@ impl ReadingCursor {
                 .find(|g| g.bytes.start == offsets[p])
                 .map(|g| g.rect)
         };
+        let (pressed, released, pointer) = ui.input(|i| {
+            (
+                i.pointer.primary_pressed(),
+                i.pointer.primary_released(),
+                i.pointer.interact_pos(),
+            )
+        });
+        {
+            if pressed && pointer.is_some_and(|p| ui.clip_rect().contains(p)) {
+                self.visible = false;
+                self.anchor = None;
+                self.pending = None;
+                self.mouse_origin = pointer;
+            }
+            if released && let Some(origin) = self.mouse_origin.take() {
+                let selected = ui.ctx().with_plugin(
+                    |state: &mut egui::text_selection::LabelSelectionState| state.has_selection(),
+                );
+                if let Some(pointer) = pointer
+                    && (selected.unwrap_or(false)
+                        || (pointer.distance(origin) > 6.0
+                            && index.glyphs.iter().any(|g| g.rect.contains(origin))))
+                    && let Some((p, _)) = (0..chars.len())
+                        .filter_map(|p| rect(p).map(|r| (p, r)))
+                        .min_by(|(_, a), (_, b)| {
+                            a.distance_sq_to_pos(pointer)
+                                .total_cmp(&b.distance_sq_to_pos(pointer))
+                        })
+                {
+                    self.position = p;
+                    self.activated = true;
+                }
+            }
+        }
         let mut moved = false;
         for motion in self.motions.drain(..) {
+            if !matches!(motion, Motion::Cancel | Motion::Yank) {
+                self.visible = true;
+                ui.ctx()
+                    .with_plugin(|state: &mut egui::text_selection::LabelSelectionState| {
+                        state.clear_selection()
+                    });
+            }
+            if matches!(motion, Motion::Left | Motion::Right | Motion::Vertical(_)) {
+                self.character_highlight = true;
+                if !self.activated {
+                    self.activated = true;
+                    self.position = chars.iter().position(|ch| !ch.is_whitespace()).unwrap_or(0);
+                    moved = true;
+                    continue;
+                }
+            } else if !matches!(motion, Motion::Select | Motion::Yank | Motion::Cancel) {
+                self.character_highlight = false;
+            }
+            if !matches!(motion, Motion::Cancel | Motion::Yank) {
+                self.activated = true;
+            }
             if !matches!(motion, Motion::Find(..)) {
                 self.big_word =
                     matches!(motion, Motion::BigWord | Motion::BigEnd | Motion::BigBack);
             }
             let target = match motion {
+                Motion::Select => {
+                    self.anchor = if self.anchor.is_some() {
+                        None
+                    } else {
+                        Some(self.position)
+                    };
+                    self.position
+                }
+                Motion::Cancel => {
+                    self.visible = false;
+                    self.anchor = None;
+                    self.position
+                }
+                Motion::Yank => {
+                    if let Some(anchor) = self.anchor.take() {
+                        let start = anchor.min(self.position).min(chars.len() - 1);
+                        let end = anchor.max(self.position).min(chars.len() - 1);
+                        ui.ctx().copy_text(chars[start..=end].iter().collect());
+                    }
+                    self.position
+                }
+                Motion::Left => self.position.saturating_sub(1),
+                Motion::Right => (self.position + 1).min(chars.len() - 1),
+                Motion::Vertical(down) => rect(self.position)
+                    .and_then(|current| {
+                        let line_y = (0..chars.len())
+                            .filter_map(&rect)
+                            .filter(|r| {
+                                if down {
+                                    r.center().y > current.center().y + current.height() * 0.5
+                                } else {
+                                    r.center().y < current.center().y - current.height() * 0.5
+                                }
+                            })
+                            .min_by(|a, b| {
+                                (a.center().y - current.center().y)
+                                    .abs()
+                                    .total_cmp(&(b.center().y - current.center().y).abs())
+                            })?
+                            .center()
+                            .y;
+                        (0..chars.len())
+                            .filter_map(|p| rect(p).map(|r| (p, r)))
+                            .filter(|(_, r)| (r.center().y - line_y).abs() < r.height() * 0.5)
+                            .min_by(|(_, a), (_, b)| {
+                                (a.center().x - current.center().x)
+                                    .abs()
+                                    .total_cmp(&(b.center().x - current.center().x).abs())
+                            })
+                            .map(|(p, _)| p)
+                    })
+                    .unwrap_or(self.position),
+
                 Motion::LineStart | Motion::LineEnd => {
                     let line = rect(self.position);
                     let candidates: Box<dyn Iterator<Item = usize>> =
@@ -232,6 +385,9 @@ impl ReadingCursor {
             moved |= target != self.position;
             self.position = target;
         }
+        if !self.visible {
+            return;
+        }
         let class = |ch| {
             if self.big_word {
                 u8::from(!char::is_whitespace(ch))
@@ -242,13 +398,17 @@ impl ReadingCursor {
         let kind = class(chars[self.position]);
         let mut start = self.position;
         let mut end = start + 1;
-        if kind != 0 {
+        if kind != 0 && !self.character_highlight {
             while start > 0 && class(chars[start - 1]) == kind {
                 start -= 1;
             }
             while end < chars.len() && class(chars[end]) == kind {
                 end += 1;
             }
+        }
+        if let Some(anchor) = self.anchor {
+            start = anchor.min(self.position).min(chars.len() - 1);
+            end = (anchor.max(self.position) + 1).min(chars.len());
         }
         for p in start..end {
             if let Some(r) = rect(p) {
@@ -259,14 +419,8 @@ impl ReadingCursor {
                 );
             }
         }
-        if let Some(r) = rect(self.position) {
-            ui.painter().line_segment(
-                [r.left_top(), r.left_bottom()],
-                egui::Stroke::new(2.0, ui.visuals().text_color()),
-            );
-            if moved {
-                ui.scroll_to_rect_animation(r, None, egui::style::ScrollAnimation::none());
-            }
+        if moved && let Some(r) = rect(self.position) {
+            ui.scroll_to_rect_animation(r, None, egui::style::ScrollAnimation::none());
         }
     }
 }
@@ -274,6 +428,204 @@ impl ReadingCursor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hide_resume_and_mouse_selection_remember_position() {
+        let ctx = egui::Context::default();
+        let mut cursor = ReadingCursor::default();
+        let mut cache = egui_commonmark::CommonMarkCache::default();
+        let mut frame = |cursor: &mut ReadingCursor, events| {
+            let mut rects = Vec::new();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    cursor.input(ui.ctx(), true, false);
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let (_, report) = egui_commonmark::CommonMarkViewer::new()
+                            .show_with_report(ui, &mut cache, "```text\n  abc def\n```");
+                        let index = TextIndex::new(&report);
+                        rects = index.glyphs.iter().map(|g| g.rect).collect();
+                        cursor.render(ui, &index);
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            rects
+        };
+        let key = |key| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut cursor, vec![]);
+        assert!(!cursor.visible);
+        let rects = frame(&mut cursor, vec![key(Key::L)]);
+        assert_eq!(cursor.position, 2);
+        assert!(cursor.visible);
+        frame(&mut cursor, vec![key(Key::Escape)]);
+        assert!(!cursor.visible);
+        assert_eq!(cursor.position, 2);
+        frame(&mut cursor, vec![key(Key::L)]);
+        assert_eq!(cursor.position, 3);
+        assert!(cursor.visible);
+        let start = rects[2].center();
+        frame(
+            &mut cursor,
+            vec![Event::PointerMoved(start), button(start, true)],
+        );
+        assert!(!cursor.visible);
+        frame(&mut cursor, vec![button(start, false)]);
+        assert_eq!(cursor.position, 3);
+        frame(&mut cursor, vec![key(Key::L)]);
+        assert_eq!(cursor.position, 4);
+        // A real mouse drag replaces the remembered keyboard position.
+        let end = rects[7].center();
+        frame(
+            &mut cursor,
+            vec![Event::PointerMoved(start), button(start, true)],
+        );
+        frame(&mut cursor, vec![Event::PointerMoved(end)]);
+        frame(&mut cursor, vec![button(end, false)]);
+        assert!(!cursor.visible);
+        assert_eq!(cursor.position, 7);
+        frame(&mut cursor, vec![key(Key::H)]);
+        assert_eq!(cursor.position, 6);
+        assert!(cursor.visible);
+    }
+    #[test]
+    fn shifted_vertical_keys_scroll_without_touching_cursor_or_selection() {
+        let ctx = egui::Context::default();
+        let mut cursor = ReadingCursor {
+            position: 4,
+            anchor: Some(1),
+            ..Default::default()
+        };
+        let mut navigator = crate::navigation::Navigator::default();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events: [Key::J, Key::K]
+                    .into_iter()
+                    .map(|key| Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::SHIFT,
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+            |ui| {
+                cursor.input(ui.ctx(), true, false);
+                assert!(cursor.motions.is_empty());
+                assert_eq!(cursor.position, 4);
+                assert_eq!(cursor.anchor, Some(1));
+                assert!(!cursor.activated);
+                assert_eq!(
+                    navigator.commands(ui.ctx(), true),
+                    vec![
+                        crate::navigation::Command::Down,
+                        crate::navigation::Command::Up,
+                    ]
+                );
+            },
+        );
+        output.textures_delta.clear();
+    }
+    #[test]
+    fn first_character_motion_starts_at_document_beginning() {
+        let ctx = egui::Context::default();
+        let mut cache = egui_commonmark::CommonMarkCache::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let (_, report) = egui_commonmark::CommonMarkViewer::new().show_with_report(
+                    ui,
+                    &mut cache,
+                    "first word\n\nsecond line",
+                );
+                let index = TextIndex::new(&report);
+                for motion in [Motion::Right, Motion::Vertical(true)] {
+                    let mut cursor = ReadingCursor::default();
+                    // Rendering alone must not count as the first cursor interaction.
+                    cursor.render(ui, &index);
+                    cursor.motions.push(motion);
+                    cursor.render(ui, &index);
+                    assert_eq!(cursor.position, 0);
+                    assert!(cursor.character_highlight);
+                    cursor.motions.push(motion);
+                    cursor.render(ui, &index);
+                    assert!(cursor.position > 0);
+                    assert!(cursor.character_highlight);
+                    cursor.motions.push(Motion::Word);
+                    cursor.render(ui, &index);
+                    assert!(!cursor.character_highlight);
+                    cursor.motions.push(Motion::Left);
+                    cursor.render(ui, &index);
+                    assert!(cursor.character_highlight);
+                }
+            });
+        });
+        output.textures_delta.clear();
+    }
+    #[test]
+    fn character_selection_copies_unicode_and_arrows_remain_available() {
+        let ctx = egui::Context::default();
+        let mut cursor = ReadingCursor::default();
+        let mut cache = egui_commonmark::CommonMarkCache::default();
+        let key = |key| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut output =
+            ctx.run_ui(
+                egui::RawInput {
+                    events: vec![
+                        key(Key::V),
+                        key(Key::L),
+                        key(Key::L),
+                        key(Key::Y),
+                        key(Key::ArrowDown),
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    cursor.input(ui.ctx(), true, false);
+                    assert!(ui.input(|i| i.key_pressed(Key::ArrowDown)));
+                    assert!(!ui.input(|i| i.key_pressed(Key::L)));
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let (_, report) = egui_commonmark::CommonMarkViewer::new()
+                            .show_with_report(ui, &mut cache, "aé日z\n\nnext");
+                        let index = TextIndex::new(&report);
+                        cursor.render(ui, &index);
+                        assert_eq!(cursor.position, 2);
+                        assert!(cursor.anchor.is_none());
+                        cursor.motions.push(Motion::Vertical(true));
+                        cursor.render(ui, &index);
+                        assert!(cursor.position > 3);
+                        cursor.motions.push(Motion::Vertical(false));
+                        cursor.render(ui, &index);
+                        assert!(cursor.position < 4);
+                    });
+                },
+            );
+        assert!(output.platform_output.commands.iter().any(
+            |command| matches!(command, egui::OutputCommand::CopyText(text) if text == "aé日")
+        ));
+        output.textures_delta.clear();
+    }
     #[test]
     fn line_edges_use_visual_wrapping_and_preserve_find_targets() {
         let ctx = egui::Context::default();

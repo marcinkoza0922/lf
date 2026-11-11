@@ -100,8 +100,9 @@ empty matches, and Escape dismissal. Clippy and formatting checks pass.
 
 ## Document keyboard navigation
 
-Arrow Up/Down and K/J move vertically by one reading line; Left/Right and H/L
-move horizontally when wide content overflows. The document scroll area supports
+Arrow Up/Down scroll vertically by one reading line; Left/Right
+scroll horizontally when wide content overflows. H/J/K/L are consumed by the
+reading cursor before scroll navigation. The document scroll area supports
 both axes while prose continues wrapping to the reading width. The reading
 column is centered using the scroll viewport width, with 12-point minimum side
 margins, independent of overflowing content. Prose explicitly uses word wrapping
@@ -171,9 +172,9 @@ and heading overlays.
 
 ## Reading cursor and Vim word motions
 
-The document has a visible caret and a translucent highlight over its current
-word (or punctuation run), independent of mouse selection and search highlights.
-It starts at the first rendered character and resets on opening a new document.
+The document uses a translucent highlight over its current word (or punctuation
+run), with no caret. The highlight is initially hidden and cursor memory resets
+on opening a new document.
 `w` moves to the next word start, `e` to the next word end, and `b` to the previous
 word start. `W`, `E`, and `B` use whitespace-separated WORDs, including
 punctuation, and highlight the entire current WORD. Unicode letters/numbers and underscores form words; punctuation forms
@@ -197,3 +198,33 @@ The Space shortcut opens the fuzzy file finder, freeing `f` for character finds.
 Tests cover lowercase and shifted keys, Unicode whitespace and punctuation
 boundaries, pending character input,
 shortcut suppression, and character finds using actual rendered line geometry.
+
+
+`h`/`l` move the reading cursor one Unicode character backward/forward, clamped
+at document boundaries. `j`/`k` move to the nearest character by horizontal
+position on the next/previous rendered line, including soft wraps. Arrow keys
+retain scrolling behavior. `v` toggles continuous character selection anchored
+at the cursor; all cursor motions extend it, including both endpoints. Escape
+cancels it. `y` or Ctrl+C copies the selected rendered text to the system clipboard
+and exits selection mode. Without a keyboard selection, Ctrl+C retains native
+mouse-selection copying. Selection and cursor positions clamp after reload.
+
+Character motions (`h`/`j`/`k`/`l`) highlight only the current character outside
+visual selection mode; word motions restore word highlighting. The first
+character motion after opening a document activates the cursor at its first
+non-whitespace character, without advancing. Merely rendering the document does not activate it.
+Subsequent character motions move normally; `v` continues extending the full
+anchored selection.
+
+Shift+J and Shift+K scroll down/up by one reading line without moving or
+activating the reading cursor or changing an anchored selection. Pending
+character-find targets retain precedence over these shortcuts.
+
+Escape and a primary click inside the document hide the keyboard highlight and
+cancel visual selection while preserving the last keyboard position. Escape
+also retains search dismissal behavior. Resuming keyboard motions advances from
+that remembered position. A new mouse text selection replaces it with the
+character nearest the mouse selection's active endpoint, including backward
+drags. Starting keyboard navigation clears the native mouse selection so only
+the keyboard highlight remains. Shift+J/K scrolling does not reveal a hidden
+highlight.
