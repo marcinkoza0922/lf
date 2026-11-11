@@ -268,6 +268,13 @@ impl ReadingCursor {
         });
     }
     pub fn render(&mut self, ui: &egui::Ui, index: &TextIndex) {
+        // Hidden cursors need no character/geometry work until input arrives.
+        if !self.visible
+            && self.motions.is_empty()
+            && !ui.input(|i| i.pointer.primary_pressed() || i.pointer.primary_released())
+        {
+            return;
+        }
         let chars: Vec<char> = index.text.chars().collect();
         if chars.is_empty() {
             self.position = 0;
@@ -279,8 +286,9 @@ impl ReadingCursor {
         let rect = |p: usize| {
             index
                 .glyphs
-                .iter()
-                .find(|g| g.bytes.start == offsets[p])
+                .binary_search_by_key(&offsets[p], |g| g.bytes.start)
+                .ok()
+                .map(|i| &index.glyphs[i])
                 .map(|g| g.rect)
         };
         let (pressed, released, pointer) = ui.input(|i| {

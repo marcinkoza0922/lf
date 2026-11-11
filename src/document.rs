@@ -49,10 +49,14 @@ impl Document {
 
 fn read(path: &std::path::Path) -> Result<String, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
-    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+    let metadata = file.metadata().map_err(|e| e.to_string())?;
+    if !metadata.is_file() {
         return Err("Choose a regular Markdown file".into());
     }
-    let mut bytes = Vec::new();
+    if metadata.len() > MAX_BYTES {
+        return Err("Document exceeds the 16 MiB limit".into());
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(MAX_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;

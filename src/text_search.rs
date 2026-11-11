@@ -31,8 +31,38 @@ pub struct TextIndex {
     pub text: String,
     pub(crate) glyphs: Vec<Glyph>,
     pub headings: Vec<(usize, Rect)>,
+    runs: Vec<egui_commonmark::TextRun>,
 }
 impl TextIndex {
+    /// Reuse glyph geometry while scrolling; rebuild only when layout/content changes.
+    pub fn update(&mut self, report: &RenderReport) {
+        let delta = report
+            .runs
+            .first()
+            .zip(self.runs.first())
+            .map_or(egui::Vec2::ZERO, |(new, old)| new.pos - old.pos);
+        let unchanged = self.runs.len() == report.runs.len()
+            && self.runs.iter().zip(&report.runs).all(|(old, new)| {
+                std::sync::Arc::ptr_eq(&old.galley, &new.galley)
+                    && old.source == new.source
+                    && old.heading == new.heading
+                    && (new.pos - old.pos - delta).length_sq() < 0.0001
+            });
+        if unchanged {
+            if delta != egui::Vec2::ZERO {
+                for glyph in &mut self.glyphs {
+                    glyph.rect = glyph.rect.translate(delta);
+                }
+                for (_, rect) in &mut self.headings {
+                    *rect = rect.translate(delta);
+                }
+            }
+            self.runs.clone_from(&report.runs);
+        } else {
+            *self = Self::new(report);
+        }
+    }
+
     pub fn new(report: &RenderReport) -> Self {
         let mut index = Self::default();
         let mut last: Option<Rect> = None;
@@ -60,7 +90,7 @@ impl TextIndex {
                     local_byte += glyph.chr.len_utf8();
                     if let Some(id) = run.heading {
                         if let Some((_, heading_rect)) =
-                            index.headings.iter_mut().find(|(i, _)| *i == id)
+                            index.headings.last_mut().filter(|(i, _)| *i == id)
                         {
                             *heading_rect = heading_rect.union(rect);
                         } else {
@@ -75,13 +105,15 @@ impl TextIndex {
             }
             last = Some(rect);
         }
+        index.runs.clone_from(&report.runs);
         index
     }
     fn rects(&self, range: &Range<usize>) -> Vec<Rect> {
+        let start = self.glyphs.partition_point(|g| g.bytes.end <= range.start);
         highlight_rects(
-            self.glyphs
+            self.glyphs[start..]
                 .iter()
-                .filter(|g| g.bytes.start < range.end && g.bytes.end > range.start)
+                .take_while(|g| g.bytes.start < range.end)
                 .map(|g| g.rect),
         )
     }
@@ -317,8 +349,11 @@ impl Search {
             if let Some((i, _)) = matches.iter().enumerate().min_by_key(|(_, range)| {
                 index
                     .glyphs
-                    .iter()
-                    .find(|g| g.bytes.start >= range.start)
+                    .get(
+                        index
+                            .glyphs
+                            .partition_point(|g| g.bytes.start < range.start),
+                    )
                     .map_or(usize::MAX, |g| g.source.abs_diff(source))
             }) {
                 self.active = i;
@@ -433,6 +468,49 @@ pub fn find_matches(text: &str, query: &str) -> Vec<Range<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cached_index_matches_rebuild_after_scroll_reflow_and_content_changes() {
+        let ctx = egui::Context::default();
+        let mut cache = egui_commonmark::CommonMarkCache::default();
+        let mut index = TextIndex::default();
+        for (text, width) in [
+            (
+                "# One\n\nUnicode café **bold** and text.\n\n## Two\n\nLast paragraph.",
+                400.0,
+            ),
+            (
+                "# One\n\nUnicode café **bold** and text.\n\n## Two\n\nLast paragraph.",
+                100.0,
+            ),
+            ("# Changed\n\nDifferent content.", 100.0),
+        ] {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_width(width);
+                let (_, mut report) =
+                    egui_commonmark::CommonMarkViewer::new().show_with_report(ui, &mut cache, text);
+                for delta in [egui::Vec2::ZERO, egui::vec2(-10.0, -235.0)] {
+                    for run in &mut report.runs {
+                        run.pos += delta;
+                    }
+                    index.update(&report);
+                    let fresh = TextIndex::new(&report);
+                    assert_eq!(index.text, fresh.text);
+                    assert_eq!(index.headings, fresh.headings);
+                    assert_eq!(index.glyphs.len(), fresh.glyphs.len());
+                    for (a, b) in index.glyphs.iter().zip(&fresh.glyphs) {
+                        assert_eq!(a.bytes, b.bytes);
+                        assert!((a.rect.min - b.rect.min).length() < 0.001);
+                        assert!((a.rect.max - b.rect.max).length() < 0.001);
+                    }
+                    assert_eq!(
+                        index.rects(&(0..index.text.len())),
+                        fresh.rects(&(0..fresh.text.len()))
+                    );
+                }
+            });
+            output.textures_delta.clear();
+        }
+    }
     #[test]
     fn highlight_spans_join_variable_width_glyphs_but_keep_lines_and_columns_separate() {
         let rect = |x, y, w, h| Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));

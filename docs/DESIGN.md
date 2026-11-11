@@ -20,6 +20,8 @@ images. No asset creation pipeline is needed.
 
 Preferences are serialized by eframe into its application storage. Fonts are
 listed using fontdb and loaded on selection, with built-in fonts as fallbacks.
+System font discovery is deferred until preferences are opened or a persisted
+system font is needed; default startup does not scan installed fonts.
 Themes: Paper, Solarized Light, Gruvbox Light, Dracula, Gruvbox Dark, Nord,
 Solarized Dark, and Tokyo Night. Automatic mode uses configurable local-hour
 boundaries (default 07:00 inclusive to 19:00 exclusive), with independent day
@@ -48,7 +50,10 @@ invalid UTF-8, file size limit, and recovery after deletion/atomic replacement.
 `cargo clippy --message-format=short` checks the application; `cargo fmt --check`
 checks formatting. `cargo run -- path/to/file.md` launches the reader. The KDE
 portal service and its KDE backend must be installed for the native chooser.
-No helper tools are currently required; future helpers belong in `tools/`.
+`tools/profile.rs`, compiled into the `--profile FILE [FRAMES]` command, measures
+file reads, isolated system font discovery, and headless rendering/index/cursor
+CPU times. `MD_READER_PROFILE_STARTUP=1` logs native setup and first UI frame
+latency. See [PERFORMANCE.md](PERFORMANCE.md) for results and reproduction.
 
 ## Visible spacing and renderer extension
 
@@ -153,6 +158,15 @@ actual glyph layout, source spans, and parsed heading identities, including
 links, tables, and highlighted code. This allows matching across formatting spans,
 scrolling to offscreen matches, and overlays independent of egui's selection state.
 Reports are rebuilt after content or layout changes, keeping autoreload correct.
+The application caches its text index using galley identity, source spans, heading
+IDs, and relative run positions. A uniform scroll translates cached rectangles;
+reflow or content changes rebuild the index. Opening/reloading clears it. Heading
+rectangles accumulate in document order without scanning prior headings. Search
+range geometry and cursor character lookup use binary searches over ordered glyph
+byte offsets, avoiding repeated scans of the whole document. Hidden idle cursors
+skip character/offset allocation entirely. File reads reserve the reported file
+size and reject oversized files from metadata, retaining a bounded read to guard
+against files growing during the read.
 
 `S` opens recursive literal content search in all `.md` files under the captured
 launch directory. Execute `rg` directly with fixed-string, case-insensitive,

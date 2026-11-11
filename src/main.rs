@@ -1,6 +1,8 @@
 mod document;
 mod grep_search;
 mod navigation;
+#[path = "../tools/profile.rs"]
+mod profile;
 mod quick_select;
 mod reading_cursor;
 mod text_search;
@@ -18,6 +20,11 @@ use std::{
 use theme::{Preferences, Theme};
 
 fn main() -> eframe::Result {
+    let startup = Instant::now();
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--profile")) {
+        profile::run();
+        return Ok(());
+    }
     let mut args = std::env::args_os().skip(1);
     let first = args.next();
     if first.as_deref().is_some_and(|a| a == "--help" || a == "-h") {
@@ -35,15 +42,27 @@ fn main() -> eframe::Result {
                 .with_min_inner_size([580.0, 360.0]),
             ..Default::default()
         },
-        Box::new(move |cc| Ok(Box::new(Reader::new(cc, path)))),
+        Box::new(move |cc| {
+            let mut reader = Reader::new(cc, path);
+            if std::env::var_os("MD_READER_PROFILE_STARTUP").is_some() {
+                reader.startup = Some(startup);
+                eprintln!(
+                    "startup_setup_ms={:.3}",
+                    startup.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+            Ok(Box::new(reader))
+        }),
     )
 }
 
 struct Reader {
+    startup: Option<Instant>,
     preferences: Preferences,
     document: Option<Document>,
     cache: CommonMarkCache,
-    fonts: fontdb::Database,
+    text_index: text_search::TextIndex,
+    fonts: Option<fontdb::Database>,
     families: Vec<String>,
     applied_font: String,
     applied_theme: Option<Theme>,
@@ -68,20 +87,14 @@ impl Reader {
             .and_then(|s| eframe::get_value(s, "preferences"))
             .unwrap_or_default();
         preferences.sanitize();
-        let mut fonts = fontdb::Database::new();
-        fonts.load_system_fonts();
-        let mut families: Vec<_> = fonts
-            .faces()
-            .flat_map(|f| f.families.iter().map(|(name, _)| name.clone()))
-            .collect();
-        families.sort();
-        families.dedup();
         let mut reader = Self {
+            startup: None,
             preferences,
             document: None,
             cache: CommonMarkCache::default(),
-            fonts,
-            families,
+            text_index: text_search::TextIndex::default(),
+            fonts: None,
+            families: Vec::new(),
             applied_font: String::new(),
             applied_theme: None,
             last_poll: Instant::now(),
@@ -129,6 +142,7 @@ impl Reader {
     }
     fn clear_cache(&mut self, ctx: &egui::Context) {
         self.cache = CommonMarkCache::default();
+        self.text_index = text_search::TextIndex::default();
         ctx.forget_all_images();
     }
     fn reload(&mut self, ctx: &egui::Context) {
@@ -160,6 +174,17 @@ impl Reader {
     }
 
     fn appearance(&mut self, ctx: &egui::Context) {
+        if self.fonts.is_none() && (self.settings || self.preferences.font != "Built-in") {
+            let mut fonts = fontdb::Database::new();
+            fonts.load_system_fonts();
+            self.families = fonts
+                .faces()
+                .flat_map(|f| f.families.iter().map(|(name, _)| name.clone()))
+                .collect();
+            self.families.sort();
+            self.families.dedup();
+            self.fonts = Some(fonts);
+        }
         let theme = self.preferences.theme(chrono::Local::now().hour());
         if self.applied_theme != Some(theme) {
             ctx.set_visuals(theme.visuals());
@@ -190,8 +215,9 @@ impl Reader {
                     families: &[fontdb::Family::Name(&self.preferences.font)],
                     ..Default::default()
                 };
-                if let Some(id) = self.fonts.query(&query) {
-                    if let Some(data) = self.fonts.with_face_data(id, |bytes, index| {
+                let fonts = self.fonts.as_ref().unwrap();
+                if let Some(id) = fonts.query(&query) {
+                    if let Some(data) = fonts.with_face_data(id, |bytes, index| {
                         let mut data = FontData::from_owned(bytes.to_vec());
                         data.index = index;
                         data
@@ -571,10 +597,11 @@ impl eframe::App for Reader {
                                 ui.add_space(40.0);
                             });
                         });
-                        let index = text_search::TextIndex::new(&report);
-                        self.search.render(ui, &index, ui.clip_rect().top());
+                        self.text_index.update(&report);
+                        let index = &self.text_index;
+                        self.search.render(ui, index, ui.clip_rect().top());
                         self.cursor.navigate(&commands);
-                        self.cursor.render(ui, &index);
+                        self.cursor.render(ui, index);
                         navigation::apply(
                             ui,
                             viewport,
@@ -597,6 +624,12 @@ impl eframe::App for Reader {
                 });
             }
         });
+        if let Some(startup) = self.startup.take() {
+            eprintln!(
+                "startup_first_ui_ms={:.3}",
+                startup.elapsed().as_secs_f64() * 1000.0
+            );
+        }
     }
 }
 
