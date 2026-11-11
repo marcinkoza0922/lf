@@ -573,6 +573,7 @@ impl eframe::App for Reader {
                         });
                         let index = text_search::TextIndex::new(&report);
                         self.search.render(ui, &index, ui.clip_rect().top());
+                        self.cursor.navigate(&commands);
                         self.cursor.render(ui, &index);
                         navigation::apply(
                             ui,

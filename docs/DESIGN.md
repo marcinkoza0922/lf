@@ -107,9 +107,14 @@ both axes while prose continues wrapping to the reading width. The reading
 column is centered using the scroll viewport width, with 12-point minimum side
 margins, independent of overflowing content. Prose explicitly uses word wrapping
 (including long words) within that column. Page Up/Down move
-90% of the visible document height, retaining context. Home and `gg` go to the
-top; End, Shift+G, and `ge` go to the bottom. Two-key sequences have a one-second
-window, ignore held-G repeats, and reset on unrelated keys, opening a new document,
+90% of the visible document height, retaining context. Home scrolls to the
+top; End scrolls to the bottom. `gg` moves the reading cursor to the first
+non-whitespace character; Shift+G and `ge` move it to the beginning of the last
+visual line, including leading whitespace, and scroll the target into view. Pressing `g` opens a clickable Go to command palette. It stays open until a
+command, Escape, or dismissal. `gt` / `gb` move the cursor to the beginning of
+the first / last fully visible line without scrolling. `gh` / `gl` move to the
+beginning / end of the current visual line, like `0` / `$`. Two-key sequences
+ignore held-G repeats and reset on unrelated keys, opening a new document,
 or entering a modal/text control. Keyboard deltas apply to the document scroll
 area only, using its current content and viewport bounds, and clamp at both ends.
 Quick select, the file chooser, and focused appearance controls retain their own
@@ -178,8 +183,7 @@ on opening a new document.
 `w` moves to the next word start, `e` to the next word end, and `b` to the previous
 word start. `W`, `E`, and `B` use whitespace-separated WORDs, including
 punctuation, and highlight the entire current WORD. Unicode letters/numbers and underscores form words; punctuation forms
-separate runs. Boundaries clamp to the document. `ge` retains its existing
-bottom-of-document binding. `0` moves to the first character of the current
+separate runs. Boundaries clamp to the document. `gg`, `ge`, and Shift+G use the document cursor bindings described above. `0` moves to the first character of the current
 visual line (including leading whitespace), and `$` moves to its last character.
 These motions follow soft wrapping; character events support shifted keyboard
 layouts, and pending `f`/`t`/`F`/`T` targets take precedence.

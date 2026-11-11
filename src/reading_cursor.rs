@@ -18,6 +18,9 @@ enum Motion {
     Cancel,
     LineStart,
     LineEnd,
+    DocumentFirst,
+    DocumentLastLine,
+    Viewport(bool),
 }
 #[derive(Default)]
 pub struct ReadingCursor {
@@ -88,6 +91,26 @@ fn word_motion(chars: &[char], position: usize, motion: Motion) -> usize {
     p.min(chars.len() - 1)
 }
 impl ReadingCursor {
+    pub fn navigate(&mut self, commands: &[crate::navigation::Command]) {
+        for command in commands {
+            match command {
+                crate::navigation::Command::CursorFirst => self.motions.push(Motion::DocumentFirst),
+                crate::navigation::Command::CursorLastLine => {
+                    self.motions.push(Motion::DocumentLastLine)
+                }
+                crate::navigation::Command::ViewportTop => {
+                    self.motions.push(Motion::Viewport(false))
+                }
+                crate::navigation::Command::ViewportBottom => {
+                    self.motions.push(Motion::Viewport(true))
+                }
+                crate::navigation::Command::LineStart => self.motions.push(Motion::LineStart),
+                crate::navigation::Command::LineEnd => self.motions.push(Motion::LineEnd),
+                _ => {}
+            }
+        }
+    }
+
     pub fn input(&mut self, ctx: &egui::Context, enabled: bool, reserve_e: bool) {
         if !enabled {
             self.pending = None;
@@ -96,6 +119,7 @@ impl ReadingCursor {
         }
         ctx.input_mut(|i| {
             let mut prefix_text = false;
+            let mut navigation_prefix = reserve_e;
             i.events.retain(|event| match event {
                 Event::Key {
                     key: Key::Escape,
@@ -127,6 +151,10 @@ impl ReadingCursor {
                 } if !modifiers.ctrl && !modifiers.alt && !modifiers.command => {
                     if self.pending.is_some() {
                         return false;
+                    }
+                    if *key == Key::G || navigation_prefix {
+                        navigation_prefix = true;
+                        return true;
                     }
                     let motion = match key {
                         Key::H => Some(Motion::Left),
@@ -174,6 +202,8 @@ impl ReadingCursor {
                             self.motions.push(Motion::Find(ch, till, backward));
                         }
                         false
+                    } else if navigation_prefix {
+                        true
                     } else if text == "0" || text == "$" {
                         self.motions.push(if text == "0" {
                             Motion::LineStart
@@ -305,6 +335,43 @@ impl ReadingCursor {
                     }
                     self.position
                 }
+                Motion::Viewport(bottom) => {
+                    let clip = ui.clip_rect();
+                    let visible: Vec<_> = (0..chars.len())
+                        .filter_map(|p| rect(p).map(|r| (p, r)))
+                        .filter(|(_, r)| r.top() >= clip.top() && r.bottom() <= clip.bottom())
+                        .collect();
+                    let line = if bottom {
+                        visible.last()
+                    } else {
+                        visible.first()
+                    };
+                    line.and_then(|(_, line)| {
+                        visible.iter().find(|(_, r)| {
+                            (r.center().y - line.center().y).abs()
+                                < r.height().min(line.height()) * 0.5
+                        })
+                    })
+                    .map_or(self.position, |(p, _)| *p)
+                }
+                Motion::DocumentFirst => {
+                    chars.iter().position(|ch| !ch.is_whitespace()).unwrap_or(0)
+                }
+                Motion::DocumentLastLine => {
+                    let last = (0..chars.len()).rev().find_map(|p| rect(p).map(|r| (p, r)));
+                    last.map_or(0, |(end, line)| {
+                        (0..=end)
+                            .rev()
+                            .take_while(|&p| {
+                                rect(p).is_some_and(|r| {
+                                    (r.center().y - line.center().y).abs()
+                                        < r.height().min(line.height()) * 0.5
+                                })
+                            })
+                            .last()
+                            .unwrap_or(end)
+                    })
+                }
                 Motion::Left => self.position.saturating_sub(1),
                 Motion::Right => (self.position + 1).min(chars.len() - 1),
                 Motion::Vertical(down) => rect(self.position)
@@ -382,7 +449,7 @@ impl ReadingCursor {
                 }
                 _ => word_motion(&chars, self.position, motion),
             };
-            moved |= target != self.position;
+            moved |= target != self.position && !matches!(motion, Motion::Viewport(_));
             self.position = target;
         }
         if !self.visible {
@@ -428,6 +495,108 @@ impl ReadingCursor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn g_prefix_routes_line_and_viewport_commands_before_cursor_motions() {
+        let ctx = egui::Context::default();
+        ctx.options_mut(|options| options.max_passes = std::num::NonZeroUsize::new(1).unwrap());
+        let mut cursor = ReadingCursor::default();
+        let mut nav = crate::navigation::Navigator::default();
+        let mut cache = egui_commonmark::CommonMarkCache::default();
+        for (key, expected) in [(Key::T, 5), (Key::B, 14), (Key::L, 17), (Key::H, 14)] {
+            let events = [Key::G, key]
+                .into_iter()
+                .flat_map(|key| {
+                    [true, false].map(move |pressed| Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    })
+                })
+                .collect();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    cursor.input(ui.ctx(), true, nav.word_end_reserved(ui.ctx()));
+                    let commands = nav.commands(ui.ctx(), true);
+                    assert_eq!(commands.len(), 1);
+                    cursor.navigate(&commands);
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let (_, report) = egui_commonmark::CommonMarkViewer::new()
+                            .show_with_report(
+                                ui,
+                                &mut cache,
+                                "```text\nzero\n  middle\nlast\nhidden\n```",
+                            );
+                        let index = TextIndex::new(&report);
+                        let first = index
+                            .glyphs
+                            .iter()
+                            .find(|g| g.bytes.start == 5)
+                            .unwrap()
+                            .rect;
+                        let last = index
+                            .glyphs
+                            .iter()
+                            .find(|g| g.bytes.start == 14)
+                            .unwrap()
+                            .rect;
+                        ui.set_clip_rect(egui::Rect::from_min_max(
+                            egui::pos2(0.0, first.top() - 0.1),
+                            egui::pos2(1000.0, last.bottom() + 0.1),
+                        ));
+                        cursor.render(ui, &index);
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            assert_eq!(cursor.position, expected);
+        }
+    }
+
+    #[test]
+    fn document_jumps_move_cursor_and_extend_selection() {
+        let ctx = egui::Context::default();
+        let mut cursor = ReadingCursor::default();
+        let mut cache = egui_commonmark::CommonMarkCache::default();
+        let mut frame = |cursor: &mut ReadingCursor, command| {
+            cursor.navigate(&[command]);
+            let mut text = String::new();
+            let mut output =
+                ctx.run_ui(egui::RawInput::default(), |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let (_, report) = egui_commonmark::CommonMarkViewer::new()
+                            .show_with_report(ui, &mut cache, "```text\n  αbc\n    last\n```");
+                        let index = TextIndex::new(&report);
+                        text = index.text.clone();
+                        cursor.render(ui, &index);
+                    });
+                });
+            output.textures_delta.clear();
+            text
+        };
+        use crate::navigation::Command;
+        let text = frame(&mut cursor, Command::CursorLastLine);
+        let last_line = text
+            .chars()
+            .collect::<Vec<_>>()
+            .windows(8)
+            .position(|chars| chars.iter().collect::<String>() == "    last")
+            .unwrap();
+        assert_eq!(cursor.position, last_line);
+        assert!(cursor.visible);
+        cursor.anchor = Some(last_line);
+        frame(&mut cursor, Command::CursorFirst);
+        assert_eq!(cursor.position, 2);
+        assert_eq!(cursor.anchor, Some(last_line));
+        frame(&mut cursor, Command::CursorLastLine);
+        assert_eq!(cursor.position, last_line);
+    }
+
     #[test]
     fn hide_resume_and_mouse_selection_remember_position() {
         let ctx = egui::Context::default();
