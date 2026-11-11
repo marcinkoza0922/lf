@@ -10,6 +10,12 @@ pub enum Command {
     PageDown,
     Top,
     Bottom,
+    CursorFirst,
+    CursorLastLine,
+    ViewportTop,
+    ViewportBottom,
+    LineStart,
+    LineEnd,
 }
 
 #[derive(Default)]
@@ -18,6 +24,43 @@ pub struct Navigator {
 }
 
 impl Navigator {
+    pub fn word_end_reserved(&self, _ctx: &egui::Context) -> bool {
+        self.pending_g.is_some()
+    }
+
+    fn palette(&mut self, ctx: &egui::Context) -> Option<Command> {
+        self.pending_g?;
+        let mut selected = None;
+        let mut open = true;
+        egui::Window::new("Go to")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                for (shortcut, label, command) in [
+                    ("gg", "First non-whitespace character", Command::CursorFirst),
+                    (
+                        "ge / Shift+G",
+                        "Beginning of last line",
+                        Command::CursorLastLine,
+                    ),
+                    ("gt", "Top of viewport", Command::ViewportTop),
+                    ("gb", "Bottom of viewport", Command::ViewportBottom),
+                    ("gh", "Beginning of line", Command::LineStart),
+                    ("gl", "End of line", Command::LineEnd),
+                ] {
+                    if ui.button(format!("{shortcut}   {label}")).clicked() {
+                        selected = Some(command);
+                    }
+                }
+                ui.weak("Escape to close");
+            });
+        if !open || selected.is_some() {
+            self.reset();
+        }
+        selected
+    }
+
     pub fn reset(&mut self) {
         self.pending_g = None;
     }
@@ -27,7 +70,7 @@ impl Navigator {
             self.reset();
             return Vec::new();
         }
-        ctx.input_mut(|input| {
+        let mut commands = ctx.input_mut(|input| {
             let now = input.time;
             let mut commands = Vec::new();
             input.events.retain(|event| {
@@ -46,7 +89,9 @@ impl Navigator {
                 !handled
             });
             commands
-        })
+        });
+        commands.extend(self.palette(ctx));
+        commands
     }
 
     fn key(
@@ -60,19 +105,25 @@ impl Navigator {
             self.reset();
             return (false, None);
         }
-        let pending = self
-            .pending_g
-            .is_some_and(|time| (0.0..=1.0).contains(&(now - time)));
+        let pending = self.pending_g.is_some();
         let command = match key {
-            Key::G if modifiers.shift => Some(Command::Bottom),
+            Key::G if modifiers.shift => Some(Command::CursorLastLine),
             Key::G => {
                 if repeat {
                     return (true, None);
                 }
                 self.pending_g = if pending { None } else { Some(now) };
-                return (true, pending.then_some(Command::Top));
+                return (true, pending.then_some(Command::CursorFirst));
             }
-            Key::E if pending && !modifiers.shift => Some(Command::Bottom),
+            Key::E if pending && !modifiers.shift => Some(Command::CursorLastLine),
+            Key::T if pending && !modifiers.shift => Some(Command::ViewportTop),
+            Key::B if pending && !modifiers.shift => Some(Command::ViewportBottom),
+            Key::H if pending && !modifiers.shift => Some(Command::LineStart),
+            Key::L if pending && !modifiers.shift => Some(Command::LineEnd),
+            Key::Escape if pending => {
+                self.reset();
+                return (true, None);
+            }
             Key::Home => Some(Command::Top),
             Key::End => Some(Command::Bottom),
             Key::ArrowUp | Key::K => Some(Command::Up),
@@ -116,6 +167,12 @@ fn target_offset(
             Command::PageDown => offset.y += page,
             Command::Top => offset.y = 0.0,
             Command::Bottom => offset.y = max.y,
+            Command::CursorFirst
+            | Command::CursorLastLine
+            | Command::ViewportTop
+            | Command::ViewportBottom
+            | Command::LineStart
+            | Command::LineEnd => {}
         }
         offset = offset.clamp(Vec2::ZERO, max);
     }
@@ -126,20 +183,29 @@ fn target_offset(
 mod tests {
     use super::*;
     #[test]
-    fn sequences_timeout_reset_and_ignore_g_repeat() {
+    fn sequences_reset_and_ignore_g_repeat() {
         let mut nav = Navigator::default();
         let none = Modifiers::NONE;
         assert_eq!(nav.key(Key::G, none, false, 0.0), (true, None));
         assert_eq!(nav.key(Key::G, none, true, 0.1), (true, None));
-        assert_eq!(nav.key(Key::G, none, false, 0.2).1, Some(Command::Top));
+        assert_eq!(
+            nav.key(Key::G, none, false, 0.2).1,
+            Some(Command::CursorFirst)
+        );
         nav.key(Key::G, none, false, 1.0);
-        assert_eq!(nav.key(Key::E, none, false, 1.1).1, Some(Command::Bottom));
+        assert_eq!(
+            nav.key(Key::E, none, false, 1.1).1,
+            Some(Command::CursorLastLine)
+        );
         assert_eq!(
             nav.key(Key::G, Modifiers::SHIFT, false, 2.0).1,
-            Some(Command::Bottom)
+            Some(Command::CursorLastLine)
         );
         nav.key(Key::G, none, false, 3.0);
-        assert_eq!(nav.key(Key::E, none, false, 4.1), (false, None));
+        assert_eq!(
+            nav.key(Key::E, none, false, 4.1).1,
+            Some(Command::CursorLastLine)
+        );
         nav.key(Key::G, none, false, 5.0);
         nav.key(Key::X, none, false, 5.1);
         assert_eq!(nav.key(Key::E, none, false, 5.2), (false, None));

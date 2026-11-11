@@ -1,7 +1,10 @@
 mod document;
 mod grep_search;
 mod navigation;
+#[path = "../tools/profile.rs"]
+mod profile;
 mod quick_select;
+mod reading_cursor;
 mod text_search;
 mod theme;
 
@@ -17,11 +20,16 @@ use std::{
 use theme::{Preferences, Theme};
 
 fn main() -> eframe::Result {
+    let startup = Instant::now();
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--profile")) {
+        profile::run();
+        return Ok(());
+    }
     let mut args = std::env::args_os().skip(1);
     let first = args.next();
     if first.as_deref().is_some_and(|a| a == "--help" || a == "-h") {
         println!(
-            "md-reader [FILE]\n\nRead Markdown on Wayland. Open: Ctrl+O, reload: R or Ctrl+R, quick select: F.\nFind text: / or Ctrl+F, search all files: S, headings: [ and ].\nDrop a file onto the window to open it. Preferences are saved automatically."
+            "md-reader [FILE]\n\nRead Markdown on Wayland. Open: Ctrl+O, reload: R or Ctrl+R, quick select: Space.\nFind text: / or Ctrl+F, search all files: S, headings: [ and ].\nDrop a file onto the window to open it. Preferences are saved automatically."
         );
         return Ok(());
     }
@@ -34,15 +42,27 @@ fn main() -> eframe::Result {
                 .with_min_inner_size([580.0, 360.0]),
             ..Default::default()
         },
-        Box::new(move |cc| Ok(Box::new(Reader::new(cc, path)))),
+        Box::new(move |cc| {
+            let mut reader = Reader::new(cc, path);
+            if std::env::var_os("MD_READER_PROFILE_STARTUP").is_some() {
+                reader.startup = Some(startup);
+                eprintln!(
+                    "startup_setup_ms={:.3}",
+                    startup.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+            Ok(Box::new(reader))
+        }),
     )
 }
 
 struct Reader {
+    startup: Option<Instant>,
     preferences: Preferences,
     document: Option<Document>,
     cache: CommonMarkCache,
-    fonts: fontdb::Database,
+    text_index: text_search::TextIndex,
+    fonts: Option<fontdb::Database>,
     families: Vec<String>,
     applied_font: String,
     applied_theme: Option<Theme>,
@@ -52,6 +72,7 @@ struct Reader {
     settings: bool,
     generation: u64,
     navigator: navigation::Navigator,
+    cursor: reading_cursor::ReadingCursor,
     search: text_search::Search,
     grep: Option<grep_search::GrepSearch>,
     quick_select: Option<quick_select::QuickSelect>,
@@ -66,20 +87,14 @@ impl Reader {
             .and_then(|s| eframe::get_value(s, "preferences"))
             .unwrap_or_default();
         preferences.sanitize();
-        let mut fonts = fontdb::Database::new();
-        fonts.load_system_fonts();
-        let mut families: Vec<_> = fonts
-            .faces()
-            .flat_map(|f| f.families.iter().map(|(name, _)| name.clone()))
-            .collect();
-        families.sort();
-        families.dedup();
         let mut reader = Self {
+            startup: None,
             preferences,
             document: None,
             cache: CommonMarkCache::default(),
-            fonts,
-            families,
+            text_index: text_search::TextIndex::default(),
+            fonts: None,
+            families: Vec::new(),
             applied_font: String::new(),
             applied_theme: None,
             last_poll: Instant::now(),
@@ -88,6 +103,7 @@ impl Reader {
             settings: false,
             generation: 0,
             navigator: navigation::Navigator::default(),
+            cursor: reading_cursor::ReadingCursor::default(),
             search: text_search::Search::default(),
             grep: None,
             quick_select: None,
@@ -111,6 +127,7 @@ impl Reader {
                 )));
                 self.navigator.reset();
                 self.search.clear(ctx);
+                self.cursor = reading_cursor::ReadingCursor::default();
                 self.document = Some(document);
                 self.error = None;
                 self.generation = self.generation.wrapping_add(1);
@@ -125,6 +142,7 @@ impl Reader {
     }
     fn clear_cache(&mut self, ctx: &egui::Context) {
         self.cache = CommonMarkCache::default();
+        self.text_index = text_search::TextIndex::default();
         ctx.forget_all_images();
     }
     fn reload(&mut self, ctx: &egui::Context) {
@@ -156,6 +174,17 @@ impl Reader {
     }
 
     fn appearance(&mut self, ctx: &egui::Context) {
+        if self.fonts.is_none() && (self.settings || self.preferences.font != "Built-in") {
+            let mut fonts = fontdb::Database::new();
+            fonts.load_system_fonts();
+            self.families = fonts
+                .faces()
+                .flat_map(|f| f.families.iter().map(|(name, _)| name.clone()))
+                .collect();
+            self.families.sort();
+            self.families.dedup();
+            self.fonts = Some(fonts);
+        }
         let theme = self.preferences.theme(chrono::Local::now().hour());
         if self.applied_theme != Some(theme) {
             ctx.set_visuals(theme.visuals());
@@ -186,8 +215,9 @@ impl Reader {
                     families: &[fontdb::Family::Name(&self.preferences.font)],
                     ..Default::default()
                 };
-                if let Some(id) = self.fonts.query(&query) {
-                    if let Some(data) = self.fonts.with_face_data(id, |bytes, index| {
+                let fonts = self.fonts.as_ref().unwrap();
+                if let Some(id) = fonts.query(&query) {
+                    if let Some(data) = fonts.with_face_data(id, |bytes, index| {
                         let mut data = FontData::from_owned(bytes.to_vec());
                         data.index = index;
                         data
@@ -313,10 +343,20 @@ impl eframe::App for Reader {
         }) {
             self.open(path, &ctx);
         }
+        self.cursor.input(
+            &ctx,
+            self.document.is_some()
+                && self.quick_select.is_none()
+                && self.grep.is_none()
+                && self.picker.is_none()
+                && !ctx.text_edit_focused()
+                && !(self.settings && ctx.egui_wants_keyboard_input()),
+            self.navigator.word_end_reserved(&ctx),
+        );
         if self.quick_select.is_none()
             && self.grep.is_none()
             && !ctx.text_edit_focused()
-            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F))
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space))
         {
             self.quick_select(&ctx);
         }
@@ -329,6 +369,9 @@ impl eframe::App for Reader {
         let no_modal = self.quick_select.is_none() && self.grep.is_none() && self.picker.is_none();
         if no_modal && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.search.clear(&ctx);
+        }
+        if no_modal {
+            self.search.option_shortcuts(&ctx);
         }
         let typing = ctx.text_edit_focused();
         if no_modal && self.document.is_some() && self.search.open_shortcut(&ctx) {
@@ -431,7 +474,7 @@ impl eframe::App for Reader {
                 {
                     self.reload(&ctx);
                 }
-                if ui.button("Quick select (F)").clicked() {
+                if ui.button("Quick select (Space)").clicked() {
                     self.quick_select(&ctx);
                 }
                 ui.separator();
@@ -459,7 +502,11 @@ impl eframe::App for Reader {
             });
         }
         if self.search.open && self.document.is_some() {
-            egui::Panel::top("document-search").show(ui, |ui| self.search.bar(ui));
+            egui::Window::new("Find in document")
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .collapsible(false)
+                .resizable(false)
+                .show(&ctx, |ui| self.search.bar(ui));
         }
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -522,13 +569,17 @@ impl eframe::App for Reader {
                     .id_salt(("document", self.generation))
                     .auto_shrink([false, false])
                     .show_viewport(ui, |ui, viewport| {
-                        let width = ui.available_width().min(self.preferences.width);
-                        let inset = ((ui.available_width() - width) / 2.0).max(0.0);
+                        let width = (viewport.width() - 24.0)
+                            .max(1.0)
+                            .min(self.preferences.width);
+                        let inset = ((viewport.width() - width) / 2.0).max(0.0);
                         let mut report = egui_commonmark::RenderReport::default();
                         ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
                             ui.add_space(inset);
                             ui.vertical(|ui| {
                                 ui.set_width(width);
+                                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                                 ui.add_space(20.0);
                                 let base = url::Url::from_directory_path(
                                     doc.path.parent().unwrap_or(std::path::Path::new("/")),
@@ -542,17 +593,15 @@ impl eframe::App for Reader {
                                     .paragraph_spacing(self.preferences.paragraph_gap)
                                     .default_implicit_uri_scheme(base)
                                     .max_image_width(Some(width as usize));
-                                if self.search.needs_report() {
-                                    report =
-                                        viewer.show_with_report(ui, &mut self.cache, &doc.text).1;
-                                } else {
-                                    viewer.show(ui, &mut self.cache, &doc.text);
-                                }
+                                report = viewer.show_with_report(ui, &mut self.cache, &doc.text).1;
                                 ui.add_space(40.0);
                             });
                         });
-                        let index = text_search::TextIndex::new(&report);
-                        self.search.render(ui, &index, ui.clip_rect().top());
+                        self.text_index.update(&report);
+                        let index = &self.text_index;
+                        self.search.render(ui, index, ui.clip_rect().top());
+                        self.cursor.navigate(&commands);
+                        self.cursor.render(ui, index);
                         navigation::apply(
                             ui,
                             viewport,
@@ -575,6 +624,12 @@ impl eframe::App for Reader {
                 });
             }
         });
+        if let Some(startup) = self.startup.take() {
+            eprintln!(
+                "startup_first_ui_ms={:.3}",
+                startup.elapsed().as_secs_f64() * 1000.0
+            );
+        }
     }
 }
 

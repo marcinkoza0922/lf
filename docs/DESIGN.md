@@ -20,6 +20,8 @@ images. No asset creation pipeline is needed.
 
 Preferences are serialized by eframe into its application storage. Fonts are
 listed using fontdb and loaded on selection, with built-in fonts as fallbacks.
+System font discovery is deferred until preferences are opened or a persisted
+system font is needed; default startup does not scan installed fonts.
 Themes: Paper, Solarized Light, Gruvbox Light, Dracula, Gruvbox Dark, Nord,
 Solarized Dark, and Tokyo Night. Automatic mode uses configurable local-hour
 boundaries (default 07:00 inclusive to 19:00 exclusive), with independent day
@@ -48,7 +50,10 @@ invalid UTF-8, file size limit, and recovery after deletion/atomic replacement.
 `cargo clippy --message-format=short` checks the application; `cargo fmt --check`
 checks formatting. `cargo run -- path/to/file.md` launches the reader. The KDE
 portal service and its KDE backend must be installed for the native chooser.
-No helper tools are currently required; future helpers belong in `tools/`.
+`tools/profile.rs`, compiled into the `--profile FILE [FRAMES]` command, measures
+file reads, isolated system font discovery, and headless rendering/index/cursor
+CPU times. `MD_READER_PROFILE_STARTUP=1` logs native setup and first UI frame
+latency. See [PERFORMANCE.md](PERFORMANCE.md) for results and reproduction.
 
 ## Visible spacing and renderer extension
 
@@ -77,7 +82,7 @@ listed in `crates/egui_commonmark/PATCHES.md`.
 
 ## Quick select
 
-Press F (outside text/numeric entry) or use Quick select in the toolbar to list
+Press Space (outside text/numeric entry) or use Quick select in the toolbar to list
 all `.md` files recursively under the launch directory, captured once at startup.
 Opening documents in other directories never changes this root. Paths are shown
 relative to this root and sorted. Hidden directories are included; directory
@@ -100,12 +105,21 @@ empty matches, and Escape dismissal. Clippy and formatting checks pass.
 
 ## Document keyboard navigation
 
-Arrow Up/Down and K/J move vertically by one reading line; Left/Right and H/L
-move horizontally when wide content overflows. The document scroll area supports
-both axes while prose continues wrapping to the reading width. Page Up/Down move
-90% of the visible document height, retaining context. Home and `gg` go to the
-top; End, Shift+G, and `ge` go to the bottom. Two-key sequences have a one-second
-window, ignore held-G repeats, and reset on unrelated keys, opening a new document,
+Arrow Up/Down scroll vertically by one reading line; Left/Right
+scroll horizontally when wide content overflows. H/J/K/L are consumed by the
+reading cursor before scroll navigation. The document scroll area supports
+both axes while prose continues wrapping to the reading width. The reading
+column is centered using the scroll viewport width, with 12-point minimum side
+margins, independent of overflowing content. Prose explicitly uses word wrapping
+(including long words) within that column. Page Up/Down move
+90% of the visible document height, retaining context. Home scrolls to the
+top; End scrolls to the bottom. `gg` moves the reading cursor to the first
+non-whitespace character; Shift+G and `ge` move it to the beginning of the last
+visual line, including leading whitespace, and scroll the target into view. Pressing `g` opens a clickable Go to command palette. It stays open until a
+command, Escape, or dismissal. `gt` / `gb` move the cursor to the beginning of
+the first / last fully visible line without scrolling. `gh` / `gl` move to the
+beginning / end of the current visual line, like `0` / `$`. Two-key sequences
+ignore held-G repeats and reset on unrelated keys, opening a new document,
 or entering a modal/text control. Keyboard deltas apply to the document scroll
 area only, using its current content and viewport bounds, and clamp at both ends.
 Quick select, the file chooser, and focused appearance controls retain their own
@@ -114,12 +128,24 @@ headless scroll offsets, including short documents and overflow on both axes.
 
 ## Search and heading navigation
 
-`/` and Ctrl+F open case-insensitive literal search over rendered document text.
+`/` and Ctrl+F open a centered, nonmodal search window over rendered document text.
+Search defaults to case-insensitive literal matching. Match case, Fuzzy, and Regex
+checkboxes control matching; fuzzy and regex are mutually exclusive. While the
+search window is open, Ctrl+I toggles Match case, Ctrl+U toggles Fuzzy, and Ctrl+Shift+R
+toggles Regex, including during text entry. These keys are consumed before global
+shortcuts; Ctrl+X retains its cut behavior and Ctrl+R reloads normally. Copy and Ctrl+F retain
+their existing behavior. Fuzzy uses
+ordered subsequences within a line and highlights the complete matched span. Regex
+uses the Rust regex engine, shows invalid-pattern errors inline, and ignores
+zero-width matches. Changing options resets the active match just like changing
+the query.
 The slash shortcut accepts character events as well as Slash key events, including
 keyboard layouts where typing `/` requires Shift, and consumes the opening
 character so it does not enter the query.
 All occurrences receive translucent amber highlights, with the active occurrence
-in orange. Enter/Shift+Enter navigate matches and release search input focus. Outside text
+in orange. Enter/Shift+Enter close the search window and release input focus, preserving
+the query, highlights, and active match. Opening search focuses the input and
+selects the entire existing query, so typing replaces it (including Unicode text). Outside text
 entry, `n`/Shift+N navigate next/previous matches; next/previous controls also
 navigate matches. Escape
 closes search and removes search/heading overlays without modifying user selection.
@@ -132,6 +158,15 @@ actual glyph layout, source spans, and parsed heading identities, including
 links, tables, and highlighted code. This allows matching across formatting spans,
 scrolling to offscreen matches, and overlays independent of egui's selection state.
 Reports are rebuilt after content or layout changes, keeping autoreload correct.
+The application caches its text index using galley identity, source spans, heading
+IDs, and relative run positions. A uniform scroll translates cached rectangles;
+reflow or content changes rebuild the index. Opening/reloading clears it. Heading
+rectangles accumulate in document order without scanning prior headings. Search
+range geometry and cursor character lookup use binary searches over ordered glyph
+byte offsets, avoiding repeated scans of the whole document. Hidden idle cursors
+skip character/offset allocation entirely. File reads reserve the reported file
+size and reject oversized files from metadata, retaining a bounded read to guard
+against files growing during the read.
 
 `S` opens recursive literal content search in all `.md` files under the captured
 launch directory. Execute `rg` directly with fixed-string, case-insensitive,
@@ -150,5 +185,74 @@ formatting-spanning matches, search focus release and match shortcuts, rg/grep p
 filenames, literal query argument handling, and result limits. Twenty-one tests
 pass, with clean clippy and formatting checks. Recursive search is over source
 text; markup-only matches scroll to the closest rendered text when there is no
-visible occurrence to highlight. Renderer reports are collected only while
-search or heading overlays are active.
+visible occurrence to highlight. Renderer reports are collected for the visible reading cursor as well as search
+and heading overlays.
+
+
+## Reading cursor and Vim word motions
+
+The document uses a translucent highlight over its current word (or punctuation
+run), with the active cursor character in a distinct theme-derived color. The highlight is initially hidden and cursor memory resets
+on opening a new document.
+`w` moves to the next word start, `e` to the next word end, and `b` to the previous
+word start. `W`, `E`, and `B` use whitespace-separated WORDs, including
+punctuation. End and backward motions highlight only the traversed portion of
+the destination word, including both endpoints: from `n` in `monkey`, `e`
+highlights `nkey` with the cursor on `y`; a following `b` highlights `monkey`
+with the cursor on `m`. Word-start motions (`w`/`W`) highlight the destination
+word. The cursor character also stays distinct within visual selections. Unicode letters/numbers and underscores form words; punctuation forms
+separate runs. Boundaries clamp to the document. `gg`, `ge`, and Shift+G use the document cursor bindings described above. `0` moves to the first character of the current
+visual line (including leading whitespace), and `$` moves to its last character.
+These motions follow soft wrapping; character events support shifted keyboard
+layouts, and pending `f`/`t`/`F`/`T` targets take precedence.
+
+`f` followed by a character moves onto its next occurrence on the current visual
+line; `t` stops just before it. `F` finds the previous occurrence on the same
+visual line and `T` stops just after that occurrence. Both directions exclude
+the current character. Failed finds leave the cursor in place. Escape
+cancels a pending character target. Target characters are consumed before app
+shortcuts, and motions are suppressed in text controls, appearance controls, and
+modals. Cursor movement scrolls the target into view and preserves clipboard
+selection. Layout reports provide character rectangles across Markdown formatting
+and reflow. After reload the character position is clamped to the current text.
+The Space shortcut opens the fuzzy file finder, freeing `f` for character finds.
+
+Tests cover lowercase and shifted keys, Unicode whitespace and punctuation
+boundaries, pending character input,
+shortcut suppression, and character finds using actual rendered line geometry.
+
+
+`h`/`l` move the reading cursor one Unicode character backward/forward, clamped
+at document boundaries. `j`/`k` move to the nearest character by horizontal
+position on the next/previous rendered line, including soft wraps. Arrow keys
+retain scrolling behavior. `v` toggles continuous character selection anchored
+at the cursor; all cursor motions extend it, including both endpoints. Escape
+cancels it. `y` or Ctrl+C copies the selected rendered text to the system clipboard
+and exits selection mode. Without a keyboard selection, Ctrl+C retains native
+mouse-selection copying. Selection and cursor positions clamp after reload.
+
+Character motions (`h`/`j`/`k`/`l`) highlight only the current character outside
+visual selection mode; word motions restore word highlighting. The first
+character motion after opening a document activates the cursor at its first
+non-whitespace character, without advancing. Merely rendering the document does not activate it.
+Subsequent character motions move normally; `v` continues extending the full
+anchored selection.
+
+Shift+J and Shift+K scroll down/up by one reading line without moving or
+activating the reading cursor or changing an anchored selection. Pending
+character-find targets retain precedence over these shortcuts.
+
+Escape and a primary click inside the document hide the keyboard highlight and
+cancel visual selection while preserving the last keyboard position. Escape
+also retains search dismissal behavior. Resuming keyboard motions advances from
+that remembered position. A new mouse text selection replaces it with the
+character nearest the mouse selection's active endpoint, including backward
+drags. Starting keyboard navigation clears the native mouse selection so only
+the keyboard highlight remains. Shift+J/K scrolling does not reveal a hidden
+highlight.
+
+Highlight overlays for the reading cursor, keyboard selection, search matches,
+and headings merge adjacent glyph rectangles into continuous line spans before
+painting. This removes internal rounded corners and repeated translucent blending
+at kerning overlaps in proportional fonts. Small layout rounding gaps are joined;
+wrapped lines and separated columns retain independent spans.
