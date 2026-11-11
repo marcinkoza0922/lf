@@ -178,11 +178,15 @@ and heading overlays.
 ## Reading cursor and Vim word motions
 
 The document uses a translucent highlight over its current word (or punctuation
-run), with no caret. The highlight is initially hidden and cursor memory resets
+run), with the active cursor character in a distinct theme-derived color. The highlight is initially hidden and cursor memory resets
 on opening a new document.
 `w` moves to the next word start, `e` to the next word end, and `b` to the previous
 word start. `W`, `E`, and `B` use whitespace-separated WORDs, including
-punctuation, and highlight the entire current WORD. Unicode letters/numbers and underscores form words; punctuation forms
+punctuation. End and backward motions highlight only the traversed portion of
+the destination word, including both endpoints: from `n` in `monkey`, `e`
+highlights `nkey` with the cursor on `y`; a following `b` highlights `monkey`
+with the cursor on `m`. Word-start motions (`w`/`W`) highlight the destination
+word. The cursor character also stays distinct within visual selections. Unicode letters/numbers and underscores form words; punctuation forms
 separate runs. Boundaries clamp to the document. `gg`, `ge`, and Shift+G use the document cursor bindings described above. `0` moves to the first character of the current
 visual line (including leading whitespace), and `$` moves to its last character.
 These motions follow soft wrapping; character events support shifted keyboard

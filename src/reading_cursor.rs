@@ -27,6 +27,7 @@ pub struct ReadingCursor {
     position: usize,
     big_word: bool,
     character_highlight: bool,
+    word_origin: Option<usize>,
     activated: bool,
     visible: bool,
     mouse_origin: Option<egui::Pos2>,
@@ -91,6 +92,36 @@ fn word_motion(chars: &[char], position: usize, motion: Motion) -> usize {
     p.min(chars.len() - 1)
 }
 impl ReadingCursor {
+    fn highlight_range(&self, chars: &[char]) -> (usize, usize) {
+        let class = |ch| {
+            if self.big_word {
+                u8::from(!char::is_whitespace(ch))
+            } else {
+                class(ch)
+            }
+        };
+        let kind = class(chars[self.position]);
+        let mut start = self.position;
+        let mut end = start + 1;
+        if kind != 0 && !self.character_highlight {
+            while start > 0 && class(chars[start - 1]) == kind {
+                start -= 1;
+            }
+            while end < chars.len() && class(chars[end]) == kind {
+                end += 1;
+            }
+        }
+        if let Some(origin) = self.word_origin {
+            start = start.max(origin.min(self.position));
+            end = end.min(origin.max(self.position).saturating_add(1));
+        }
+        if let Some(anchor) = self.anchor {
+            start = anchor.min(self.position).min(chars.len() - 1);
+            end = (anchor.max(self.position) + 1).min(chars.len());
+        }
+        (start, end)
+    }
+
     pub fn navigate(&mut self, commands: &[crate::navigation::Command]) {
         for command in commands {
             match command {
@@ -313,6 +344,13 @@ impl ReadingCursor {
                 self.big_word =
                     matches!(motion, Motion::BigWord | Motion::BigEnd | Motion::BigBack);
             }
+            if !matches!(motion, Motion::Select | Motion::Yank | Motion::Cancel) {
+                self.word_origin = matches!(
+                    motion,
+                    Motion::End | Motion::BigEnd | Motion::Back | Motion::BigBack
+                )
+                .then_some(self.position);
+            }
             let target = match motion {
                 Motion::Select => {
                     self.anchor = if self.anchor.is_some() {
@@ -455,31 +493,17 @@ impl ReadingCursor {
         if !self.visible {
             return;
         }
-        let class = |ch| {
-            if self.big_word {
-                u8::from(!char::is_whitespace(ch))
-            } else {
-                class(ch)
-            }
-        };
-        let kind = class(chars[self.position]);
-        let mut start = self.position;
-        let mut end = start + 1;
-        if kind != 0 && !self.character_highlight {
-            while start > 0 && class(chars[start - 1]) == kind {
-                start -= 1;
-            }
-            while end < chars.len() && class(chars[end]) == kind {
-                end += 1;
-            }
-        }
-        if let Some(anchor) = self.anchor {
-            start = anchor.min(self.position).min(chars.len() - 1);
-            end = (anchor.max(self.position) + 1).min(chars.len());
-        }
+        let (start, end) = self.highlight_range(&chars);
         for r in crate::text_search::highlight_rects((start..end).filter_map(rect)) {
             ui.painter()
                 .rect_filled(r, 1.0, ui.visuals().selection.bg_fill.gamma_multiply(0.45));
+        }
+        if let Some(r) = rect(self.position) {
+            ui.painter().rect_filled(
+                r,
+                1.0,
+                ui.visuals().selection.stroke.color.gamma_multiply(0.55),
+            );
         }
         if moved && let Some(r) = rect(self.position) {
             ui.scroll_to_rect_animation(r, None, egui::style::ScrollAnimation::none());
@@ -490,6 +514,48 @@ impl ReadingCursor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn partial_word_highlights_follow_the_active_cursor() {
+        let ctx = egui::Context::default();
+        let mut cache = egui_commonmark::CommonMarkCache::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let (_, report) = egui_commonmark::CommonMarkViewer::new().show_with_report(
+                    ui,
+                    &mut cache,
+                    "monkey café,tail next",
+                );
+                let index = TextIndex::new(&report);
+                let chars: Vec<_> = index.text.chars().collect();
+                for (position, motion, expected_position, expected_text) in [
+                    (2, Motion::End, 5, "nkey"),
+                    (5, Motion::Back, 0, "monkey"),
+                    (2, Motion::Back, 0, "mon"),
+                    (5, Motion::End, 10, "café"),
+                    (8, Motion::BigEnd, 15, "afé,tail"),
+                    (8, Motion::BigBack, 7, "ca"),
+                    (2, Motion::Word, 7, "café"),
+                ] {
+                    let mut cursor = ReadingCursor {
+                        position,
+                        activated: true,
+                        ..Default::default()
+                    };
+                    cursor.motions.push(motion);
+                    cursor.render(ui, &index);
+                    assert_eq!(cursor.position, expected_position);
+                    let (start, end) = cursor.highlight_range(&chars);
+                    assert_eq!(chars[start..end].iter().collect::<String>(), expected_text);
+                    cursor.anchor = Some(2);
+                    let (start, end) = cursor.highlight_range(&chars);
+                    assert_eq!(start, 2.min(expected_position));
+                    assert_eq!(end, 2.max(expected_position) + 1);
+                }
+            });
+        });
+        output.textures_delta.clear();
+    }
+
     #[test]
     fn g_prefix_routes_line_and_viewport_commands_before_cursor_motions() {
         let ctx = egui::Context::default();
