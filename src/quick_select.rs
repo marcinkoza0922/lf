@@ -311,7 +311,7 @@ mod tests {
     use super::*;
     #[test]
     fn recursively_lists_markdown_and_avoids_symlink_cycles() {
-        let root = std::env::temp_dir().join(format!("md-reader-select-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("lf-select-{}", std::process::id()));
         fs::create_dir_all(root.join("nested/.hidden")).unwrap();
         for file in [
             "first.md",
@@ -445,7 +445,7 @@ mod tests {
     #[test]
     fn missing_root_is_reported() {
         let result = scan(
-            Path::new("/this-directory-does-not-exist-md-reader"),
+            Path::new("/this-directory-does-not-exist-lf"),
             &AtomicBool::new(false),
         );
         assert!(result.files.is_empty());

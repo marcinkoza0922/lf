@@ -396,8 +396,7 @@ mod tests {
     use super::*;
     #[test]
     fn limits_results_and_treats_queries_as_literal_arguments() {
-        let root =
-            std::env::temp_dir().join(format!("md-reader-grep-limit-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("lf-grep-limit-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("many.md"), "needle\n".repeat(1005)).unwrap();
         let results = run(&root, "needle", &Process::default(), None);
@@ -418,7 +417,7 @@ mod tests {
     }
     #[test]
     fn rg_and_grep_search_hidden_markdown_and_parse_unusual_filenames() {
-        let root = std::env::temp_dir().join(format!("md-reader-grep-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("lf-grep-{}", std::process::id()));
         std::fs::create_dir_all(root.join(".hidden")).unwrap();
         std::fs::write(
             root.join(".hidden/colon:new\nline.MD"),

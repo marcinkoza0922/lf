@@ -1,15 +1,16 @@
-# Markdown Reader
+# Leaf
 
-A read-only Rust Markdown reader for Linux/Wayland.
+A read-only Rust Markdown reader for Linux/Wayland. The executable is named `lf`.
 
 ```sh
-cargo run --release -- README.md
+cargo install --path .
+lf README.md
 ```
 
 Use **Open…**, **Ctrl+O**, or drop a file onto the window. The native file chooser
 uses the desktop portal; on KDE install and enable `xdg-desktop-portal` and
 `xdg-desktop-portal-kde` to get KDE's file dialog. No GTK file chooser is bundled.
-`md-reader --help` prints usage.
+`lf --help` prints usage.
 
 Press **Space** or click **Quick select** to find `.md` files recursively under the
 **launch directory**, even after opening a document elsewhere. Type a fuzzy query,
