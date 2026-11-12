@@ -25,8 +25,10 @@ and its dependencies beside `lf.exe`. Media libraries are not bundled.
 ## Building packages
 
 Run the **Release packages** GitHub Actions workflow manually or push a `v*` tag.
-All four native builds upload archives and checksums as workflow artifacts;
-the workflow does not publish a GitHub release. Download artifacts from the run.
+All four native builds upload compressed archives and checksums as workflow artifacts.
+Version tags also publish those archives and checksums to GitHub Releases, after
+all four builds succeed. Rerunning a tagged workflow replaces its release assets.
+Manual branch runs only prepare workflow artifacts; download them from the run.
 The workflow uses Rust stable and the committed Cargo.lock.
 
 For a local package (Python 3.11+ required):
