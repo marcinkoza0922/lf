@@ -80,10 +80,10 @@ for size in (65536, 1048576, 16777216):
     Path(f'/tmp/md-profile-{size}.md').write_text(
         block * (size // len(block.encode())), encoding='utf-8')
 PY
-target/release/md-reader --profile /tmp/md-profile-1048576.md 3
+target/release/lf --profile /tmp/md-profile-1048576.md 3
 /usr/bin/time -f 'peak_rss_kib=%M elapsed_s=%e' \
-    target/release/md-reader --profile /tmp/md-profile-16777216.md 2
-MD_READER_PROFILE_STARTUP=1 target/release/md-reader README.md
+    target/release/lf --profile /tmp/md-profile-16777216.md 2
+LF_PROFILE_STARTUP=1 target/release/lf README.md
 ```
 
 `tools/profile.rs` is compiled through a path module in `main.rs`. Its font scan

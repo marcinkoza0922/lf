@@ -11,6 +11,14 @@ fonts, adjustable text size, extra color themes, and preferences persisted
 between launches were confirmed. Automatic day/night themes follow local time.
 Automatic reload is available as an opt-in reading preference; it defaults to off.
 
+## Project identity
+
+The project, Cargo package, executable, and GitHub repository are named `lf`.
+Install with `cargo install --path .`, then open a document with `lf FILE`.
+The window title and eframe application storage use `lf`; preferences from the
+previous application name are not migrated automatically. Startup profiling uses
+`LF_PROFILE_STARTUP=1`.
+
 ## Architecture
 
 Use eframe/egui with the native Wayland and OpenGL backend. egui_commonmark
@@ -52,7 +60,7 @@ checks formatting. `cargo run -- path/to/file.md` launches the reader. The KDE
 portal service and its KDE backend must be installed for the native chooser.
 `tools/profile.rs`, compiled into the `--profile FILE [FRAMES]` command, measures
 file reads, isolated system font discovery, and headless rendering/index/cursor
-CPU times. `MD_READER_PROFILE_STARTUP=1` logs native setup and first UI frame
+CPU times. `LF_PROFILE_STARTUP=1` logs native setup and first UI frame
 latency. See [PERFORMANCE.md](PERFORMANCE.md) for results and reproduction.
 
 ## Visible spacing and renderer extension

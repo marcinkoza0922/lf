@@ -78,7 +78,7 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             let p = std::env::temp_dir().join(format!(
-                "md-reader-{}-{}",
+                "lf-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));

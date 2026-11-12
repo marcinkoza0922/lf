@@ -31,13 +31,13 @@ fn main() -> eframe::Result {
     let first = args.next();
     if first.as_deref().is_some_and(|a| a == "--help" || a == "-h") {
         println!(
-            "md-reader [FILE]\n\nRead Markdown on Wayland. Open: Ctrl+O, reload: R or Ctrl+R, quick select: Space.\nFind text: / or Ctrl+F, search all files: S, headings: [ and ].\nDrop a file onto the window to open it. Preferences are saved automatically."
+            "lf [FILE]\n\nRead Markdown on Wayland. Open: Ctrl+O, reload: R or Ctrl+R, quick select: Space.\nFind text: / or Ctrl+F, search all files: S, headings: [ and ].\nDrop a file onto the window to open it. Preferences are saved automatically."
         );
         return Ok(());
     }
     let path = first.map(PathBuf::from);
     eframe::run_native(
-        "Markdown Reader",
+        "lf",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1000.0, 800.0])
@@ -46,7 +46,7 @@ fn main() -> eframe::Result {
         },
         Box::new(move |cc| {
             let mut reader = Reader::new(cc, path);
-            if std::env::var_os("MD_READER_PROFILE_STARTUP").is_some() {
+            if std::env::var_os("LF_PROFILE_STARTUP").is_some() {
                 reader.startup = Some(startup);
                 eprintln!(
                     "startup_setup_ms={:.3}",
@@ -126,9 +126,7 @@ impl Reader {
                     .file_name()
                     .unwrap_or_default()
                     .to_string_lossy();
-                ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
-                    "{name} — Markdown Reader"
-                )));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{name} — lf")));
                 self.navigator.reset();
                 self.search.clear(ctx);
                 self.cursor = reading_cursor::ReadingCursor::default();
@@ -484,7 +482,7 @@ impl eframe::App for Reader {
                     self.quick_select(&ctx);
                 }
                 ui.separator();
-                ui.label(RichText::new("Markdown Reader").strong());
+                ui.label(RichText::new("lf").strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.selectable_label(self.settings, "Appearance").clicked() {
                         self.settings = !self.settings;

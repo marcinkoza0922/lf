@@ -372,7 +372,7 @@ mod tests {
     }
     fn fixture(video: bool) -> Fixture {
         let path = std::env::temp_dir().join(format!(
-            "md-reader-media {} {}.{}",
+            "lf-media {} {}.{}",
             std::process::id(),
             video,
             if video { "mkv" } else { "wav" }
@@ -476,7 +476,7 @@ mod tests {
                 .any(|pixel| pixel.to_ne_bytes()[..3] != [0, 0, 0])
         );
         native
-            .command(&["loadfile", "/nonexistent/md-reader-missing.mp4"])
+            .command(&["loadfile", "/nonexistent/lf-missing.mp4"])
             .unwrap();
         let start = Instant::now();
         loop {
