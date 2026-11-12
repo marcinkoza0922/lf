@@ -404,7 +404,11 @@ mod tests {
         assert!(results.truncated);
         assert!(results.error.is_none());
         std::fs::write(root.join("literal.md"), "--flag $(not-a-command) [x]\n").unwrap();
-        for tool in ["rg", "grep"] {
+        for tool in if cfg!(windows) {
+            &["rg"][..]
+        } else {
+            &["rg", "grep"][..]
+        } {
             let results = run(
                 &root,
                 "--flag $(not-a-command) [x]",
@@ -416,6 +420,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    #[cfg(unix)]
     fn rg_and_grep_search_hidden_markdown_and_parse_unusual_filenames() {
         let root = std::env::temp_dir().join(format!("lf-grep-{}", std::process::id()));
         std::fs::create_dir_all(root.join(".hidden")).unwrap();

@@ -2,7 +2,7 @@
 
 ## Requirements and interview decisions
 
-A read-only Markdown desktop reader in Rust for Linux on Wayland. One document
+A read-only Markdown desktop reader in Rust for Linux on Wayland and Windows. One document
 at a time; open through the desktop's native portal file chooser, drag and drop,
 or a command-line path. Under KDE this is the KDE file dialog (the same desktop
 integration used by Dolphin), rather than embedding Dolphin itself.
@@ -22,7 +22,7 @@ previous application name are not migrated automatically. Startup profiling uses
 
 ## Architecture
 
-Use eframe/egui with the native Wayland and OpenGL backend. egui_commonmark
+Use eframe/egui with the native Wayland (Linux) or Win32 (Windows) and OpenGL backend. egui_commonmark
 renders Markdown (headings, lists, tables, links, code, local images), with
 syntect code highlighting. There is no source editor. egui_extras loads local
 images. No asset creation pipeline is needed.
@@ -344,3 +344,20 @@ for search and reading navigation. Headless geometry coverage checks viewport
 containment, column boundaries, and row heights at 360/500/700-point reading
 widths and 14/24/32-point font sizes with sample Game data cell content.
 Local sample documents in `example/` and `examples/` are ignored by Git.
+
+## Platform support and release packaging
+
+Windows uses rfd's native file chooser and ShellExecuteW for local attachment
+file associations, passing UTF-16 paths directly without a shell. Linux retains
+its portal chooser and xdg-open. Playback loads libmpv.so.2 on Linux or
+mpv-2.dll from the executable directory on Windows; libraries are optional and
+not bundled. Recursive content search requires ripgrep on Windows; GNU grep
+remains a Linux fallback. Unix-only filename tests stay Unix-only, and attachment
+URL tests derive paths from the platform temporary directory.
+
+`tools/package-release.py` packages existing release binaries into versioned
+Linux tar.gz / Windows zip archives with documentation, licenses, source identity,
+and SHA-256 sidecars. `.github/workflows/release.yml` builds natively on Linux
+and Windows x64/ARM64 and uploads artifacts on manual runs or version tags. It
+does not publish releases. See [RELEASE.md](RELEASE.md) for reproduction and
+runtime prerequisites. Windows and ARM64 have not been runtime-tested.

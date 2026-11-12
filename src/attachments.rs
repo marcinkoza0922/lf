@@ -257,6 +257,37 @@ fn open_file(url: &url::Url) -> Result<(), String> {
     if !path.exists() {
         return Err(format!("File does not exist: {}", path.display()));
     }
+    open_path(&path)
+}
+
+#[cfg(windows)]
+fn open_path(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    // ShellExecuteW opens the file association directly, without cmd.exe parsing.
+    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: the path is NUL-terminated and lives through the call; optional
+    // arguments and the parent window are null. The returned value is not owned.
+    let result = unsafe {
+        windows_sys::Win32::UI::Shell::ShellExecuteW(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            path.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+        )
+    } as isize;
+    if result > 32 {
+        Ok(())
+    } else {
+        Err(format!(
+            "Could not open file (Windows shell error {result})"
+        ))
+    }
+}
+
+#[cfg(not(windows))]
+fn open_path(path: &Path) -> Result<(), String> {
     // Paths are process arguments, never shell commands. The absolute path
     // cannot be interpreted as an xdg-open option.
     let result = std::process::Command::new("xdg-open")
@@ -278,7 +309,8 @@ mod tests {
     use super::*;
     #[test]
     fn classifies_attachments_and_preserves_web_and_anchor_links() {
-        let base = url::Url::parse("file:///tmp/docs%20folder/").unwrap();
+        let root = std::env::temp_dir();
+        let base = url::Url::from_directory_path(root.join("docs folder")).unwrap();
         for (destination, kind) in [
             ("../clip.MP4", Kind::Video),
             ("song.opus", Kind::Audio),
@@ -295,7 +327,7 @@ mod tests {
                 .url
                 .to_file_path()
                 .unwrap(),
-            Path::new("/tmp/other folder/a#b.pdf")
+            root.join("other folder/a#b.pdf")
         );
         for destination in [
             "#heading",
@@ -309,7 +341,7 @@ mod tests {
     #[test]
     fn attachment_cards_are_reported_without_parsing_labels_as_markdown() {
         let ctx = egui::Context::default();
-        let base = url::Url::parse("file:///tmp/").unwrap();
+        let base = url::Url::from_directory_path(std::env::temp_dir()).unwrap();
         let attachments = std::rc::Rc::new(std::cell::RefCell::new(Attachments::default()));
         let render = move |ui: &mut egui::Ui, dest: &str, title: &str| {
             attachments.borrow_mut().render(ui, &base, dest, title)
