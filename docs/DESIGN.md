@@ -358,6 +358,9 @@ URL tests derive paths from the platform temporary directory.
 `tools/package-release.py` packages existing release binaries into versioned
 Linux tar.gz / Windows zip archives with documentation, licenses, source identity,
 and SHA-256 sidecars. `.github/workflows/release.yml` builds natively on Linux
-and Windows x64/ARM64 and uploads artifacts on manual runs or version tags. It
-does not publish releases. See [RELEASE.md](RELEASE.md) for reproduction and
+and Windows x64/ARM64 and uploads artifacts on manual runs or version tags. After
+all four tagged builds succeed, a separate job with release write permission
+publishes the compressed archives and SHA-256 sidecars to GitHub Releases.
+Reruns replace assets for the same tag; manual branch runs only upload artifacts.
+See [RELEASE.md](RELEASE.md) for reproduction and
 runtime prerequisites. Windows and ARM64 have not been runtime-tested.
