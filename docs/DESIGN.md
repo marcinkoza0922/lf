@@ -13,7 +13,8 @@ Automatic reload is available as an opt-in reading preference; it defaults to of
 
 ## Project identity
 
-The project, Cargo package, executable, and GitHub repository are named `lf`.
+The project's official name is Leaf. The Cargo package, executable, and GitHub
+repository are named `lf`.
 Install with `cargo install --path .`, then open a document with `lf FILE`.
 The window title and eframe application storage use `lf`; preferences from the
 previous application name are not migrated automatically. Startup profiling uses

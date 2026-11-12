@@ -1,6 +1,6 @@
-# lf
+# Leaf
 
-A read-only Rust Markdown reader for Linux/Wayland.
+A read-only Rust Markdown reader for Linux/Wayland. The executable is named `lf`.
 
 ```sh
 cargo install --path .
