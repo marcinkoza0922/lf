@@ -113,12 +113,22 @@ impl Api {
         API.get_or_init(Self::open).as_ref().map_err(Clone::clone)
     }
     fn open() -> Result<Self, String> {
-        // SAFETY: load only the system libmpv SONAME; each symbol's signature
+        // SAFETY: load only the platform libmpv name; each symbol's signature
         // matches the stable public C ABI. No document-controlled library paths.
         unsafe {
-            let library = libloading::Library::new("libmpv.so.2").map_err(|_| {
-                "Inline playback requires libmpv.so.2 (install the mpv-libs / libmpv2 package)."
-                    .to_string()
+            #[cfg(windows)]
+            let name = std::env::current_exe()
+                .map_err(|e| e.to_string())?
+                .with_file_name("mpv-2.dll");
+            #[cfg(not(windows))]
+            let name = std::path::PathBuf::from("libmpv.so.2");
+            let library = libloading::Library::new(name).map_err(|_| {
+                if cfg!(windows) {
+                    "Inline playback requires a matching-architecture mpv-2.dll beside lf.exe."
+                } else {
+                    "Inline playback requires libmpv.so.2 (install the mpv-libs / libmpv2 package)."
+                }
+                .to_string()
             })?;
             macro_rules! symbol {
                 ($name:literal) => {

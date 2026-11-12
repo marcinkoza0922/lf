@@ -1,14 +1,18 @@
 # Leaf
 
-A read-only Rust Markdown reader for Linux/Wayland. The executable is named `lf`.
+A read-only Rust Markdown and UTF-8 text reader for Linux/Wayland and Windows. The executable is named `lf`.
 
 ```sh
 cargo install --path .
 lf README.md
 ```
 
+**Windows and ARM64 builds have not been runtime-tested.** Release packaging covers
+Linux and Windows on x64 and ARM64; see [release instructions](docs/RELEASE.md)
+for archives, prerequisites, and build commands.
+
 Use **Open…**, **Ctrl+O**, or drop a file onto the window. The native file chooser
-uses the desktop portal; on KDE install and enable `xdg-desktop-portal` and
+uses the Windows native dialog on Windows and the desktop portal on Linux; on KDE install and enable `xdg-desktop-portal` and
 `xdg-desktop-portal-kde` to get KDE's file dialog. No GTK file chooser is bundled.
 `lf --help` prints usage.
 
@@ -18,7 +22,12 @@ use **Tab / Shift+Tab** to select the next/previous match, **Enter** to open, an
 **Esc** to close. Files appear with relative paths; hidden directories are
 included, and directory symlinks are skipped to avoid loops.
 
-Scroll the document with **arrow keys** or **H/J/K/L** (left/down/up/right).
+Leaf implements common **Vim navigation bindings**, including **h/j/k/l** cursor
+movement, **w/e/b** and **W/E/B** word motions, **gg**, **G**, **0**, **$**,
+**f/t/F/T** character finds, **v** selection, and **y** copying. It also supports
+**/** search and **n/N** next/previous matches. Leaf remains a read-only viewer.
+
+Scroll the document with **arrow keys**; **Shift+J/K** scroll down/up by a line.
 **Page Up/Down** moves by a page with a little overlap. **Home** or **gg** goes
 to the top; **End**, **Shift+G**, or **ge** goes to the bottom. Two-key commands
 must be typed within one second. These shortcuts pause while a dialog or input
@@ -32,13 +41,14 @@ clearing your text selection.
 Press **S** to search text across all `.md` files in the launch directory and its
 subdirectories. Type a query and press **Enter** to search; use **Tab / Shift+Tab**
 to select a result, then **Enter** to open it at the match. Searches are literal
-and case-insensitive. The reader uses `rg`, falling back to `grep` if unavailable.
+and case-insensitive. The reader uses `rg` (install it on PATH), falling back to GNU `grep` on Linux.
 Results are limited to 1000 matching lines; **Esc** closes the search.
 
 Use **[ / ]** to jump to the previous/next Markdown heading. The destination
 heading is highlighted; **Esc** clears the highlight. Fenced code is excluded.
 
-Files reload automatically within about half a second. **Ctrl+R** forces a reload.
+Files are checked for changes about every half second. Automatic reload is opt-in;
+otherwise a Reload prompt appears. **Ctrl+R** forces a reload.
 Failed reloads preserve the last readable version and retry. Files must be UTF-8
 and at most 16 MiB. One document is open at a time.
 
