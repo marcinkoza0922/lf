@@ -1,6 +1,8 @@
 //! `LF_SCREENSHOT=out.ppm lf FILE` captures the window after it settles, writes a
 //! binary PPM, and exits. Used to check rendering without depending on window focus.
-//! `LF_SCREENSHOT_SIDEBAR=opened|files` shows a sidebar tab. Preferences are read
+//! `LF_SCREENSHOT_SIDEBAR=opened|files` shows a sidebar tab, and
+//! `LF_SCREENSHOT_HEADINGS=QUERY` opens the Ctrl+H heading popup filtered by QUERY
+//! (empty for all headings). Preferences are read
 //! but never saved in this mode, so captures do not alter recent files.
 use eframe::egui;
 use std::{io::Write, path::PathBuf};
@@ -24,6 +26,14 @@ impl Screenshot {
             "files" => Some(crate::sidebar::Tab::Files),
             _ => None,
         }
+    }
+    /// The heading popup query requested for the capture.
+    pub fn headings() -> Option<String> {
+        std::env::var("LF_SCREENSHOT_HEADINGS").ok()
+    }
+    /// Whether this frame should open the requested heading popup (after first layout).
+    pub fn open_headings(&self) -> bool {
+        self.frames == 5
     }
     /// Call once per frame. Requests the capture after layout and images settle.
     pub fn update(&mut self, ctx: &egui::Context) {

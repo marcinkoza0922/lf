@@ -413,6 +413,20 @@ impl List {
     }
 }
 
+/// The level (1–6) of each Markdown heading, indexed by the heading identity that
+/// [`RenderReport`] runs carry (headings are numbered in parse order).
+#[cfg(feature = "pulldown_cmark")]
+pub fn heading_levels(text: &str) -> Vec<u8> {
+    pulldown_cmark::Parser::new_ext(text, egui_commonmark_backend::pulldown::parser_options())
+        .filter_map(|event| match event {
+            pulldown_cmark::Event::Start(pulldown_cmark::Tag::Heading { level, .. }) => {
+                Some(level as u8)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// Display literal text while retaining selection and source-aware layout reports.
 pub fn show_plain_text(ui: &mut egui::Ui, text: &str, line_height: f32) -> RenderReport {
     egui_commonmark_backend::report::begin(ui.ctx());

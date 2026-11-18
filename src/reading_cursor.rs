@@ -21,6 +21,8 @@ enum Motion {
     DocumentFirst,
     DocumentLastLine,
     Viewport(bool),
+    /// Move to a byte offset in the index text (search and heading jumps).
+    Jump(usize),
 }
 #[derive(Clone, Default)]
 pub struct ReadingCursor {
@@ -140,6 +142,18 @@ impl ReadingCursor {
                 _ => {}
             }
         }
+    }
+
+    /// Follow a jump elsewhere in the document: the cursor moves (and shows) at the
+    /// character starting at `byte` of the index text, extending any selection.
+    /// The jump's own scrolling stays in charge; the cursor does not scroll.
+    pub fn jump(&mut self, byte: usize) {
+        self.motions.push(Motion::Jump(byte));
+    }
+
+    #[cfg(test)]
+    pub fn position(&self) -> usize {
+        self.position
     }
 
     pub fn input(&mut self, ctx: &egui::Context, enabled: bool, reserve_e: bool) {
@@ -327,12 +341,16 @@ impl ReadingCursor {
         }
         let mut moved = false;
         for motion in self.motions.drain(..) {
-            if !matches!(motion, Motion::Cancel | Motion::Yank) {
+            // Jumps come from search, which keeps the user's mouse selection.
+            if !matches!(motion, Motion::Cancel | Motion::Yank | Motion::Jump(_)) {
                 self.visible = true;
                 ui.ctx()
                     .with_plugin(|state: &mut egui::text_selection::LabelSelectionState| {
                         state.clear_selection()
                     });
+            }
+            if matches!(motion, Motion::Jump(_)) {
+                self.visible = true;
             }
             if matches!(motion, Motion::Left | Motion::Right | Motion::Vertical(_)) {
                 self.character_highlight = true;
@@ -418,6 +436,7 @@ impl ReadingCursor {
                             .unwrap_or(end)
                     })
                 }
+                Motion::Jump(byte) => offsets.partition_point(|&b| b < byte).min(chars.len() - 1),
                 Motion::Left => self.position.saturating_sub(1),
                 Motion::Right => (self.position + 1).min(chars.len() - 1),
                 Motion::Vertical(down) => rect(self.position)
@@ -495,7 +514,8 @@ impl ReadingCursor {
                 }
                 _ => word_motion(&chars, self.position, motion),
             };
-            moved |= target != self.position && !matches!(motion, Motion::Viewport(_));
+            moved |=
+                target != self.position && !matches!(motion, Motion::Viewport(_) | Motion::Jump(_));
             self.position = target;
         }
         if !self.visible {
@@ -664,6 +684,62 @@ mod tests {
         assert_eq!(cursor.anchor, Some(last_line));
         frame(&mut cursor, Command::CursorLastLine);
         assert_eq!(cursor.position, last_line);
+    }
+
+    #[test]
+    fn jumps_move_and_show_cursor_and_later_motions_continue_from_there() {
+        let ctx = egui::Context::default();
+        let mut cursor = ReadingCursor::default();
+        let mut cache = egui_commonmark::CommonMarkCache::default();
+        let mut frame = |cursor: &mut ReadingCursor, events: Vec<Event>| {
+            let mut text = String::new();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    cursor.input(ui.ctx(), true, false);
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let (_, report) = egui_commonmark::CommonMarkViewer::new()
+                            .show_with_report(ui, &mut cache, "Alpha beta\n\nGamma delta");
+                        let index = TextIndex::new(&report);
+                        text = index.text.clone();
+                        cursor.render(ui, &index);
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            text
+        };
+        let text = frame(&mut cursor, Vec::new());
+        assert!(!cursor.visible);
+        let gamma = text.find("Gamma").unwrap();
+        cursor.jump(gamma);
+        frame(&mut cursor, Vec::new());
+        assert_eq!(cursor.position, text[..gamma].chars().count());
+        assert!(cursor.visible && cursor.activated);
+        // The first character motion advances from the jump, not the document start.
+        frame(
+            &mut cursor,
+            vec![Event::Key {
+                key: Key::L,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert_eq!(cursor.position, text[..gamma].chars().count() + 1);
+        // A jump extends a keyboard selection, like other motions.
+        cursor.anchor = Some(0);
+        cursor.jump(text.find("delta").unwrap());
+        frame(&mut cursor, Vec::new());
+        assert_eq!(cursor.anchor, Some(0));
+        assert_eq!(
+            cursor.position,
+            text[..text.find("delta").unwrap()].chars().count()
+        );
     }
 
     #[test]

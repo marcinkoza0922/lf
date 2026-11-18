@@ -253,18 +253,26 @@ fn move_selection(selected: usize, count: usize, forward: bool) -> usize {
 }
 
 fn fuzzy_matches(files: &[PathBuf], query: &str) -> Vec<usize> {
+    fuzzy_rank(files.iter().map(|path| path.to_string_lossy()), query)
+}
+
+/// Indices of the items matching `query` as a case-insensitive ordered
+/// subsequence, best first; ties (and an empty query) keep the items' order.
+pub fn fuzzy_rank<S: AsRef<str>>(items: impl IntoIterator<Item = S>, query: &str) -> Vec<usize> {
     let query: Vec<char> = query.trim().to_lowercase().chars().collect();
-    if query.is_empty() {
-        return (0..files.len()).collect();
-    }
-    let mut matches: Vec<_> = files
-        .iter()
+    let mut matches: Vec<_> = items
+        .into_iter()
         .enumerate()
-        .filter_map(|(index, path)| {
-            fuzzy_score(&path.to_string_lossy(), &query).map(|score| (index, score))
+        .filter_map(|(index, item)| {
+            if query.is_empty() {
+                Some((index, 0))
+            } else {
+                fuzzy_score(item.as_ref(), &query).map(|score| (index, score))
+            }
         })
         .collect();
-    matches.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| files[a.0].cmp(&files[b.0])));
+    // Stable, so equal scores stay in item order.
+    matches.sort_by_key(|&(_, score)| std::cmp::Reverse(score));
     matches.into_iter().map(|(index, _)| index).collect()
 }
 
