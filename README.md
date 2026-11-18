@@ -1,5 +1,7 @@
 # Leaf
 
+<img width="1096" height="1273" alt="Screenshot_20261117_201651" src="https://github.com/user-attachments/assets/f0b95ddf-0ac7-4e1b-aa2d-bf4fced06e36" />
+
 A read-only Rust Markdown and UTF-8 text reader for Linux/Wayland and Windows. The executable is named `lf`.
 
 ```sh
