@@ -65,7 +65,8 @@ CPU times. `LF_PROFILE_STARTUP=1` logs native setup and first UI frame
 latency. See [PERFORMANCE.md](PERFORMANCE.md) for results and reproduction.
 `tools/screenshot.rs`: `LF_SCREENSHOT=out.ppm lf FILE` captures the reader's own
 window after 20 frames, writes a binary PPM, and exits. `LF_SCREENSHOT_SIDEBAR=opened|files`
-opens a sidebar tab; preferences are not saved in this mode. Visual checks therefore do not
+opens a sidebar tab and `LF_SCREENSHOT_HEADINGS=QUERY` opens the Ctrl+H popup with that
+query (empty lists all headings); preferences are not saved in this mode. Visual checks therefore do not
 depend on window focus or a desktop screenshot tool (convert with `magick out.ppm out.png`).
 
 ## Visible spacing and renderer extension
@@ -166,6 +167,20 @@ closes search and removes search/heading overlays without modifying user selecti
 viewport, with a separate heading highlight. Headings include setext headings;
 fenced-code hash signs are not headings. Navigation stops at document boundaries.
 
+Ctrl+H (outside other modals, including while typing in the search window) opens
+`src/heading_jump.rs`, a Go to heading modal over the rendered headings from the
+text index, as an outline indented by level with a weak `H1`–`H6` tag. Levels come
+from `egui_commonmark::heading_levels`, which parses with the renderer's own
+options, so the n-th level matches report heading identity n. Its query is fuzzy
+filtered with quick select's ranker (`fuzzy_rank`, shared; ties keep document
+order). With an empty query the heading at the top of the viewport is preselected.
+Up/Down and Tab/Shift+Tab move the selection; Enter or a click records the current
+place in history and sets `Search::heading_jump`, which scrolls the heading to the
+top and highlights it exactly like `[`/`]` (which then continue from it). Escape,
+Ctrl+H, or Close dismiss it. Plain-text documents show "no headings". Tests cover
+levels (ATX, setext, fenced exclusions), ranking and keys, preselection, and a
+headless end-to-end Ctrl+H → filter → Enter → Ctrl+O run of the reader.
+
 The local Markdown renderer and backend expose a per-render text report with
 actual glyph layout, source spans, and parsed heading identities, including
 links, tables, and highlighted code. This allows matching across formatting spans,
@@ -250,6 +265,17 @@ character motion after opening a document activates the cursor at its first
 non-whitespace character, without advancing. Merely rendering the document does not activate it.
 Subsequent character motions move normally; `v` continues extending the full
 anchored selection.
+
+The cursor follows jumps to another part of the document: the active search match
+(typing, `n`/Shift+N, next/previous, content-search results), `[`/`]`, the Ctrl+H
+heading popup, and heading links. `Search::render` returns the byte offset it
+jumped to and the cursor moves to that character in the same frame, becoming
+visible and active so later motions continue from there and an anchored `v`
+selection extends to it. The jump's own scrolling stays in charge (the cursor does
+not scroll), and unlike key motions a jump keeps the native mouse selection,
+preserving search's guarantee. Tests cover the motion, and Ctrl+H, `]`, and typed
+search end to end; heading links and content-search results are wired the same way
+but not separately tested.
 
 Shift+J and Shift+K scroll down/up by one reading line without moving or
 activating the reading cursor or changing an anchored selection. Pending

@@ -127,6 +127,13 @@ impl TextIndex {
         }
         texts
     }
+    /// The byte offset in `text` where a heading's rendered text starts.
+    pub fn heading_start(&self, id: usize) -> Option<usize> {
+        self.glyphs
+            .iter()
+            .find(|g| g.heading == Some(id))
+            .map(|g| g.bytes.start)
+    }
     fn rects(&self, range: &Range<usize>) -> Vec<Rect> {
         let start = self.glyphs.partition_point(|g| g.bytes.end <= range.start);
         highlight_rects(
@@ -151,6 +158,8 @@ pub struct Search {
     pub heading: Option<usize>,
     heading_anchor: Option<usize>,
     pub heading_step: Option<bool>,
+    /// A heading to scroll to the top and highlight, by identity.
+    pub heading_jump: Option<usize>,
     pub source_target: Option<usize>,
     jump: bool,
     previous_query: String,
@@ -179,7 +188,10 @@ impl Search {
     }
     #[cfg(test)]
     pub fn needs_report(&self) -> bool {
-        !self.query.is_empty() || self.heading.is_some() || self.heading_step.is_some()
+        !self.query.is_empty()
+            || self.heading.is_some()
+            || self.heading_step.is_some()
+            || self.heading_jump.is_some()
     }
     pub fn open_shortcut(&mut self, ctx: &egui::Context) -> bool {
         let typing = ctx.text_edit_focused();
@@ -342,7 +354,10 @@ impl Search {
             find_matches(text, &self.query)
         }
     }
-    pub fn render(&mut self, ui: &egui::Ui, index: &TextIndex, viewport_top: f32) {
+    /// Paint overlays and perform pending jumps. Returns the byte offset in the
+    /// index text that a jump this frame moved to, for the reading cursor to follow.
+    pub fn render(&mut self, ui: &egui::Ui, index: &TextIndex, viewport_top: f32) -> Option<usize> {
+        let mut moved_to = None;
         let matches = self.matches(&index.text);
         self.count = matches.len();
         let options = (self.case_sensitive, self.fuzzy, self.regex);
@@ -364,6 +379,7 @@ impl Search {
                     Some(egui::Align::Center),
                     egui::style::ScrollAnimation::none(),
                 );
+                moved_to = Some(glyph.bytes.start);
             }
             if let Some((i, _)) = matches.iter().enumerate().min_by_key(|(_, range)| {
                 index
@@ -401,12 +417,15 @@ impl Search {
             }
         }
         if self.jump {
-            if let Some(rect) = matches.get(self.active).and_then(|r| index.match_rect(r)) {
+            if let Some(range) = matches.get(self.active)
+                && let Some(rect) = index.match_rect(range)
+            {
                 ui.scroll_to_rect_animation(
                     rect,
                     Some(egui::Align::Center),
                     egui::style::ScrollAnimation::none(),
                 );
+                moved_to = Some(range.start);
             }
             self.jump = false;
         }
@@ -440,7 +459,20 @@ impl Search {
                     Some(egui::Align::TOP),
                     egui::style::ScrollAnimation::none(),
                 );
+                moved_to = index.heading_start(*id);
             }
+        }
+        if let Some(id) = self.heading_jump.take()
+            && let Some((id, rect)) = index.headings.iter().find(|(i, _)| *i == id)
+        {
+            self.heading = Some(*id);
+            self.heading_anchor = Some(*id);
+            ui.scroll_to_rect_animation(
+                *rect,
+                Some(egui::Align::TOP),
+                egui::style::ScrollAnimation::none(),
+            );
+            moved_to = index.heading_start(*id);
         }
         if let Some(id) = self.heading {
             for rect in highlight_rects(
@@ -457,6 +489,7 @@ impl Search {
                 );
             }
         }
+        moved_to
     }
     pub fn manually_scrolled(&mut self) {
         self.heading_anchor = None;

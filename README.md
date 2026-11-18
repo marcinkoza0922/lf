@@ -72,6 +72,10 @@ Results are limited to 1000 matching lines; **Esc** closes the search.
 
 Use **[ / ]** to jump to the previous/next Markdown heading. The destination
 heading is highlighted; **Esc** clears the highlight. Fenced code is excluded.
+**Ctrl+H** opens a Go to heading popup listing every heading as an indented
+outline. Type to fuzzy-filter, use **Up / Down** or **Tab / Shift+Tab** to select
+(the heading at your reading position is preselected), and **Enter** to jump;
+**Back** returns to where you were. **Esc** or **Ctrl+H** closes it.
 
 Files are checked for changes about every half second. Automatic reload is opt-in;
 otherwise a Reload prompt appears. **Ctrl+R** forces a reload.

@@ -31,3 +31,5 @@ independent fork intended for publication.
 - Keep tables within the reading width, wrap cells, and let rows grow vertically.
   Lay out formatted text cells as one job so inline code and prose share a
   consistent wrapping boundary.
+- Add `heading_levels(text)`, the level of each heading in parse order (the same
+  numbering as report heading identities), for the application's heading list.

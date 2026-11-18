@@ -1,6 +1,7 @@
 mod attachments;
 mod document;
 mod grep_search;
+mod heading_jump;
 mod history;
 mod navigation;
 mod playback;
@@ -35,7 +36,7 @@ fn main() -> eframe::Result {
     let first = args.next();
     if first.as_deref().is_some_and(|a| a == "--help" || a == "-h") {
         println!(
-            "lf [FILE]\n\nRead Markdown and UTF-8 text on Linux and Windows. Open: Ctrl+Shift+O, reload: R or Ctrl+R, quick select: Space.\nBack/forward: Ctrl+O / Ctrl+I, Alt+Left / Alt+Right, or mouse back/forward buttons.\nSidebar: ` (opened files), Ctrl+E (file explorer).\nFind text: / or Ctrl+F, search all files: S, headings: [ and ].\nDrop a file onto the window to open it. Preferences are saved automatically."
+            "lf [FILE]\n\nRead Markdown and UTF-8 text on Linux and Windows. Open: Ctrl+Shift+O, reload: R or Ctrl+R, quick select: Space.\nBack/forward: Ctrl+O / Ctrl+I, Alt+Left / Alt+Right, or mouse back/forward buttons.\nSidebar: ` (opened files), Ctrl+E (file explorer).\nFind text: / or Ctrl+F, search all files: S, headings: [ and ], go to heading: Ctrl+H.\nDrop a file onto the window to open it. Preferences are saved automatically."
         );
         return Ok(());
     }
@@ -83,6 +84,7 @@ struct Reader {
     search: text_search::Search,
     grep: Option<grep_search::GrepSearch>,
     quick_select: Option<quick_select::QuickSelect>,
+    headings: Option<heading_jump::HeadingJump>,
     launch_directory: Result<PathBuf, String>,
     screenshot: Option<screenshot::Screenshot>,
     history: history::History,
@@ -95,6 +97,8 @@ struct Reader {
     restore: Option<(egui::Vec2, u8)>,
     /// A heading anchor to scroll to once the document is laid out.
     anchor: Option<String>,
+    /// The top edge of the document viewport in the text index's screen coordinates.
+    viewport_top: f32,
 }
 impl Reader {
     fn new(cc: &eframe::CreationContext<'_>, path: Option<PathBuf>) -> Self {
@@ -126,6 +130,7 @@ impl Reader {
             search: text_search::Search::default(),
             grep: None,
             quick_select: None,
+            headings: None,
             launch_directory,
             screenshot: screenshot::Screenshot::from_env(),
             history: Default::default(),
@@ -134,6 +139,7 @@ impl Reader {
             scroll: egui::Vec2::ZERO,
             restore: None,
             anchor: None,
+            viewport_top: 0.0,
         };
         if reader.screenshot.is_some()
             && let Some(tab) = screenshot::Screenshot::sidebar()
@@ -295,6 +301,32 @@ impl Reader {
             let _ = tx.send(path);
             ctx.request_repaint();
         });
+    }
+    /// Whether a modal chooser owns the keyboard.
+    fn modal(&self) -> bool {
+        self.quick_select.is_some()
+            || self.grep.is_some()
+            || self.picker.is_some()
+            || self.headings.is_some()
+    }
+    fn heading_jump(&mut self) {
+        let Some(document) = &self.document else {
+            return;
+        };
+        let plain = document
+            .path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("txt"));
+        let levels = if plain {
+            Vec::new()
+        } else {
+            egui_commonmark::heading_levels(&document.text)
+        };
+        self.headings = Some(heading_jump::HeadingJump::new(
+            &self.text_index,
+            &levels,
+            self.viewport_top,
+        ));
     }
     fn quick_select(&mut self, ctx: &egui::Context) {
         match &self.launch_directory {
@@ -497,6 +529,14 @@ impl eframe::App for Reader {
         ctx.request_repaint_after(Duration::from_millis(500));
         if let Some(screenshot) = &mut self.screenshot {
             screenshot.update(&ctx);
+            if screenshot.open_headings()
+                && let Some(query) = screenshot::Screenshot::headings()
+            {
+                self.heading_jump();
+                if let Some(popup) = &mut self.headings {
+                    popup.query = query;
+                }
+            }
         }
         // Links followed during the previous frame open in this window.
         let jump = self.attachments.borrow_mut().take_jump();
@@ -527,11 +567,7 @@ impl eframe::App for Reader {
         }) {
             self.open(path, &ctx);
         }
-        if self.quick_select.is_none()
-            && self.grep.is_none()
-            && self.picker.is_none()
-            && !ctx.text_edit_focused()
-        {
+        if !self.modal() && !ctx.text_edit_focused() {
             let lists = sidebar_lists(
                 &self.opened,
                 &self.preferences.recent,
@@ -547,15 +583,14 @@ impl eframe::App for Reader {
             &ctx,
             !self.sidebar.focused
                 && self.document.is_some()
-                && self.quick_select.is_none()
-                && self.grep.is_none()
-                && self.picker.is_none()
+                && !self.modal()
                 && !ctx.text_edit_focused()
                 && !(self.settings && ctx.egui_wants_keyboard_input()),
             self.navigator.word_end_reserved(&ctx),
         );
         if self.quick_select.is_none()
             && self.grep.is_none()
+            && self.headings.is_none()
             && !ctx.text_edit_focused()
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space))
         {
@@ -563,13 +598,14 @@ impl eframe::App for Reader {
         }
         if self.quick_select.is_none()
             && self.grep.is_none()
+            && self.headings.is_none()
             && ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::O)
             })
         {
             self.choose(&ctx);
         }
-        let no_modal = self.quick_select.is_none() && self.grep.is_none() && self.picker.is_none();
+        let no_modal = !self.modal();
         if no_modal && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.search.clear(&ctx);
         }
@@ -590,6 +626,11 @@ impl eframe::App for Reader {
             });
             if back || forward {
                 self.step(back, &ctx);
+            }
+            if self.document.is_some()
+                && ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::H))
+            {
+                self.heading_jump();
             }
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::E)) {
                 self.sidebar
@@ -654,8 +695,7 @@ impl eframe::App for Reader {
             self.last_poll = Instant::now();
         }
         self.appearance(&ctx);
-        let document_shortcuts =
-            self.quick_select.is_none() && self.grep.is_none() && self.picker.is_none();
+        let document_shortcuts = !self.modal();
         if !document_shortcuts {
             self.navigator.reset();
         }
@@ -666,6 +706,21 @@ impl eframe::App for Reader {
                 quick_select::Action::Open(path) => {
                     self.quick_select = None;
                     self.open(path, &ctx);
+                }
+            }
+        }
+        if let Some(popup) = &mut self.headings {
+            match popup.show(&ctx) {
+                heading_jump::Action::Stay => {}
+                heading_jump::Action::Close => self.headings = None,
+                heading_jump::Action::Jump(id) => {
+                    self.headings = None;
+                    if let Some(from) = self.location() {
+                        self.history.visit(from);
+                    }
+                    self.sidebar.focused = false;
+                    self.restore = None;
+                    self.search.heading_jump = Some(id);
                 }
             }
         }
@@ -916,6 +971,7 @@ impl eframe::App for Reader {
                         });
                         self.text_index.update(&report);
                         self.scroll = viewport.min.to_vec2();
+                        self.viewport_top = ui.clip_rect().top();
                         if let Some(fragment) = self.anchor.take() {
                             match history::find_heading(&self.text_index, &fragment) {
                                 Some((id, rect)) => {
@@ -925,6 +981,9 @@ impl eframe::App for Reader {
                                         egui::style::ScrollAnimation::none(),
                                     );
                                     self.search.heading = Some(id);
+                                    if let Some(byte) = self.text_index.heading_start(id) {
+                                        self.cursor.jump(byte);
+                                    }
                                 }
                                 None => {
                                     self.error =
@@ -948,7 +1007,10 @@ impl eframe::App for Reader {
                             }
                         }
                         let index = &self.text_index;
-                        self.search.render(ui, index, ui.clip_rect().top());
+                        // The reading cursor follows search and heading jumps.
+                        if let Some(byte) = self.search.render(ui, index, ui.clip_rect().top()) {
+                            self.cursor.jump(byte);
+                        }
                         self.cursor.navigate(&commands);
                         self.cursor.render(ui, index);
                         navigation::apply(
@@ -1149,6 +1211,121 @@ mod rendering_tests {
             let mut output = ctx.run_ui(input, |ui| eframe::App::ui(reader, ui, &mut frame));
             output.textures_delta.clear();
         }
+    }
+    #[test]
+    fn ctrl_h_filters_headings_and_jumps_with_history() {
+        let dir = std::env::temp_dir().join(format!("lf-headings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let filler = "Filler paragraph.\n\n".repeat(60);
+        std::fs::write(
+            dir.join("doc.md"),
+            format!("# Top\n\n{filler}## Middle part\n\n{filler}### Deep end\n\nEnd.\n"),
+        )
+        .unwrap();
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut reader = Reader::new(&cc, Some(dir.join("doc.md")));
+        frames(&mut reader, &ctx, Vec::new(), 3);
+        assert_eq!(reader.scroll.y, 0.0);
+        let key = |key, modifiers| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        frames(
+            &mut reader,
+            &ctx,
+            vec![key(egui::Key::H, egui::Modifiers::CTRL)],
+            2,
+        );
+        assert!(reader.headings.is_some());
+        frames(&mut reader, &ctx, vec![egui::Event::Text("dpe".into())], 2);
+        frames(
+            &mut reader,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
+            3,
+        );
+        assert!(reader.headings.is_none());
+        assert_eq!(reader.search.heading, Some(2));
+        let deep = reader.scroll.y;
+        assert!(deep > 1500.0, "{deep}");
+        let cursor_text = |reader: &Reader| -> String {
+            reader
+                .text_index
+                .text
+                .chars()
+                .skip(reader.cursor.position())
+                .take(8)
+                .collect()
+        };
+        // The reading cursor follows the jump.
+        assert_eq!(cursor_text(&reader), "Deep end");
+        // Ctrl+O returns to where we were.
+        frames(
+            &mut reader,
+            &ctx,
+            vec![key(egui::Key::O, egui::Modifiers::CTRL)],
+            5,
+        );
+        assert!(reader.scroll.y < 1.0, "{:?}", reader.scroll);
+        // Escape and Ctrl+H both dismiss the popup without moving.
+        for close in [
+            key(egui::Key::Escape, egui::Modifiers::NONE),
+            key(egui::Key::H, egui::Modifiers::CTRL),
+        ] {
+            frames(
+                &mut reader,
+                &ctx,
+                vec![key(egui::Key::H, egui::Modifiers::CTRL)],
+                2,
+            );
+            assert!(reader.headings.is_some());
+            frames(&mut reader, &ctx, vec![close], 2);
+            assert!(reader.headings.is_none());
+            assert!(reader.scroll.y < 1.0, "{:?}", reader.scroll);
+        }
+        // Back at the top; ] steps from the viewport to the next heading.
+        frames(
+            &mut reader,
+            &ctx,
+            vec![key(egui::Key::CloseBracket, egui::Modifiers::NONE)],
+            3,
+        );
+        assert!(cursor_text(&reader).starts_with("Top"));
+        frames(
+            &mut reader,
+            &ctx,
+            vec![key(egui::Key::CloseBracket, egui::Modifiers::NONE)],
+            3,
+        );
+        assert_eq!(cursor_text(&reader), "Middle p");
+        frames(&mut reader, &ctx, vec![egui::Event::Text("/".into())], 2);
+        frames(&mut reader, &ctx, vec![egui::Event::Text("end.".into())], 3);
+        assert_eq!(cursor_text(&reader), "End.");
+        frames(
+            &mut reader,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
+            2,
+        );
+        frames(
+            &mut reader,
+            &ctx,
+            vec![key(egui::Key::H, egui::Modifiers::CTRL)],
+            2,
+        );
+        frames(&mut reader, &ctx, vec![egui::Event::Text("deep".into())], 2);
+        frames(
+            &mut reader,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
+            3,
+        );
+        assert_eq!(cursor_text(&reader), "Deep end");
+        std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn links_back_and_forward_restore_documents_and_positions() {
