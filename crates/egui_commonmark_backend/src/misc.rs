@@ -32,7 +32,7 @@ pub struct CommonMarkOptions<'f> {
     /// Whether to present a mutable ui for things like checkboxes
     pub mutable: bool,
     pub math_fn: Option<&'f crate::RenderMathFn>,
-    pub attachment_fn: Option<&'f crate::RenderAttachmentFn>,
+    pub attachment_fn: Option<&'f crate::RenderAttachmentFn<'f>>,
     pub html_fn: Option<&'f crate::RenderHtmlFn>,
     /// Whether to enable scrolling to headings by their ID.
     /// To give a heading an ID, use the syntax `# Heading {#myheadingid}`. Then links to `#myheadingid` e.g. `[click me!](#myheadingid)` will scroll to that heading.
@@ -206,6 +206,7 @@ impl Link {
         cache: &mut CommonMarkCache,
         options: &CommonMarkOptions,
         scroll_to_heading: &mut Option<String>,
+        source: std::ops::Range<usize>,
     ) {
         let Self { destination, text } = self;
 
@@ -227,7 +228,14 @@ impl Link {
             );
         }
         if let Some(render) = options.attachment_fn
-            && render(ui, &destination, &layout_job.text)
+            && render(
+                ui,
+                &crate::Attachment {
+                    destination: &destination,
+                    title: &layout_job.text,
+                    source,
+                },
+            )
         {
             return;
         }
@@ -283,10 +291,17 @@ impl Image {
         }
     }
 
-    pub fn end(self, ui: &mut Ui, options: &CommonMarkOptions) {
+    pub fn end(self, ui: &mut Ui, options: &CommonMarkOptions, source: std::ops::Range<usize>) {
         let title: String = self.alt_text.iter().map(|text| text.text()).collect();
         if let Some(render) = options.attachment_fn
-            && render(ui, &self.uri, &title)
+            && render(
+                ui,
+                &crate::Attachment {
+                    destination: &self.uri,
+                    title: &title,
+                    source,
+                },
+            )
         {
             return;
         }

@@ -22,7 +22,7 @@ enum Motion {
     DocumentLastLine,
     Viewport(bool),
 }
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ReadingCursor {
     position: usize,
     big_word: bool,

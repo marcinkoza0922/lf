@@ -76,12 +76,14 @@ use egui::{self, Id};
 
 mod parsers;
 
-pub use egui_commonmark_backend::RenderAttachmentFn;
+pub use egui_commonmark_backend::{Attachment, RenderAttachmentFn};
 pub use egui_commonmark_backend::RenderHtmlFn;
 pub use egui_commonmark_backend::RenderMathFn;
 pub use egui_commonmark_backend::alerts::{Alert, AlertBundle};
 pub use egui_commonmark_backend::misc::CommonMarkCache;
 pub use egui_commonmark_backend::report::label as attachment_label;
+pub use egui_commonmark_backend::report::link as attachment_link;
+pub use egui_commonmark_backend::report::record as attachment_record;
 pub use egui_commonmark_backend::report::{RenderReport, TextRun};
 
 #[cfg(feature = "better_syntax_highlighting")]
@@ -237,7 +239,7 @@ impl<'f> CommonMarkViewer<'f> {
 
     /// Let the application render link/image destinations as attachments.
     /// Return false to retain the normal renderer for that destination.
-    pub fn render_attachment_fn(mut self, func: Option<&'f RenderAttachmentFn>) -> Self {
+    pub fn render_attachment_fn(mut self, func: Option<&'f RenderAttachmentFn<'f>>) -> Self {
         self.options.attachment_fn = func;
         self
     }

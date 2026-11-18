@@ -11,7 +11,7 @@ lf README.md
 Linux and Windows on x64 and ARM64; see [release instructions](docs/RELEASE.md)
 for archives, prerequisites, and build commands.
 
-Use **Open…**, **Ctrl+O**, or drop a file onto the window. The native file chooser
+Use **Open…**, **Ctrl+Shift+O**, or drop a file onto the window. The native file chooser
 uses the Windows native dialog on Windows and the desktop portal on Linux; on KDE install and enable `xdg-desktop-portal` and
 `xdg-desktop-portal-kde` to get KDE's file dialog. No GTK file chooser is bundled.
 `lf --help` prints usage.
@@ -21,6 +21,32 @@ Press **Space** or click **Quick select** to find `.md` files recursively under 
 use **Tab / Shift+Tab** to select the next/previous match, **Enter** to open, and
 **Esc** to close. Files appear with relative paths; hidden directories are
 included, and directory symlinks are skipped to avoid loops.
+
+Links to other `.md`, `.markdown`, and `.txt` files open in Leaf (right-click a
+link to open it in the default app instead); other local files open in their
+default app. Heading links such as `#setup` or `guide.md#setup` jump to the
+matching heading (GitHub-style anchors). Images, audio, and video show inline only
+when they are alone on their line; elsewhere they appear as links you click to
+expand.
+
+**Back / Forward** step through opened documents and heading-link jumps, restoring
+each scroll position: **Ctrl+O / Ctrl+I**, **Alt+Left / Alt+Right**, the mouse
+back/forward buttons, or the toolbar arrows.
+
+The collapsible **sidebar** sits on the left. Collapsed, it is a slim rail: click
+the chevron or a tab icon to expand it, and drag its edge or click the inner
+chevron to collapse it again. It has two tabs. **Opened** (**`**) lists documents
+opened this session, then recent files from earlier sessions (missing files are
+dimmed). **Files** (**Ctrl+E**) is a tree of `.md` and `.txt` files under the
+launch directory with the current document revealed.
+
+A tab's key expands the sidebar on that tab and gives it keyboard focus; pressing
+it again while focused collapses the sidebar. Clicking in the sidebar also focuses
+it, and **Esc** or clicking the document returns focus to the document. While
+focused: **j/k** or **↑/↓** move the selection, **Home/End** jump to the ends,
+**Enter** opens a file (and returns focus to it) or toggles a folder, **l/→**
+expands a folder or opens a file while staying in the sidebar, **h/←** collapses
+a folder or moves to its parent, and **Tab / Shift+Tab** switch tabs.
 
 Leaf implements common **Vim navigation bindings**, including **h/j/k/l** cursor
 movement, **w/e/b** and **W/E/B** word motions, **gg**, **G**, **0**, **$**,

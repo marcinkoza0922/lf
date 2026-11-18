@@ -36,5 +36,14 @@ pub type RenderHtmlFn = dyn Fn(&mut egui::Ui, &str);
 
 pub mod report;
 
+/// A link or image destination offered to the application.
+pub struct Attachment<'a> {
+    pub destination: &'a str,
+    /// Link text or image alt text.
+    pub title: &'a str,
+    /// Source byte range of the whole link or image element.
+    pub source: std::ops::Range<usize>,
+}
+
 /// Return true when the application rendered this attachment itself.
-pub type RenderAttachmentFn = dyn Fn(&mut egui::Ui, &str, &str) -> bool;
+pub type RenderAttachmentFn<'a> = dyn Fn(&mut egui::Ui, &Attachment<'_>) -> bool + 'a;
