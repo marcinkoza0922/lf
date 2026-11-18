@@ -9,13 +9,14 @@ use std::{
     },
 };
 
+/// Readable documents under a root, as sorted root-relative paths.
 #[derive(Default)]
-struct Scan {
-    files: Vec<PathBuf>,
-    skipped: usize,
+pub struct Scan {
+    pub files: Vec<PathBuf>,
+    pub skipped: usize,
 }
 
-fn scan(root: &Path, cancelled: &AtomicBool) -> Scan {
+pub fn scan(root: &Path, cancelled: &AtomicBool) -> Scan {
     let mut result = Scan::default();
     let mut directories = vec![root.to_path_buf()];
     while let Some(directory) = directories.pop() {

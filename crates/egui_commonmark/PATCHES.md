@@ -22,7 +22,11 @@ independent fork intended for publication.
 - Add `show_plain_text` for selectable literal text with source-aware reports.
 
 - Add `render_attachment_fn` for application-owned link/image cards and players,
-  and re-export `attachment_label` to retain source-aware text layout reports.
+  and re-export `attachment_label` / `attachment_record` to retain source-aware
+  text layout reports. The callback receives an `Attachment` with the element's
+  source span, and its type alias takes a lifetime so closures may borrow.
+- Start block elements inside list items on their own line and separate later
+  paragraphs of an item; upstream suppresses all newlines inside list items.
 
 - Keep tables within the reading width, wrap cells, and let rows grow vertically.
   Lay out formatted text cells as one job so inline code and prose share a

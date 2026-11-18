@@ -86,7 +86,12 @@ pub struct Preferences {
     pub line_height: f32,
     pub paragraph_gap: f32,
     pub width: f32,
+    /// Recently opened documents, most recent first.
+    pub recent: Vec<std::path::PathBuf>,
+    /// Whether the sidebar is expanded, and its tab.
+    pub sidebar_layout: crate::sidebar::Layout,
 }
+pub const RECENT_LIMIT: usize = 30;
 impl Default for Preferences {
     fn default() -> Self {
         Self {
@@ -102,6 +107,8 @@ impl Default for Preferences {
             line_height: 1.4,
             paragraph_gap: 10.0,
             width: 850.0,
+            recent: Vec::new(),
+            sidebar_layout: Default::default(),
         }
     }
 }
@@ -119,6 +126,7 @@ impl Preferences {
         self.line_height = finite_clamp(self.line_height, 1.0, 2.4, 1.4);
         self.paragraph_gap = finite_clamp(self.paragraph_gap, 0.0, 40.0, 10.0);
         self.width = finite_clamp(self.width, 360.0, 1400.0, 850.0);
+        self.recent.truncate(RECENT_LIMIT);
         self.day_start = self.day_start.min(23);
         self.night_start = self.night_start.min(23);
         self.size = if self.size.is_finite() {

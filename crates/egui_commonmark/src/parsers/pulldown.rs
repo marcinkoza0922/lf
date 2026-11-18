@@ -84,6 +84,8 @@ pub struct CommonMarkViewerInternal {
     /// Only populated if the html_fn option has been set
     html_block: String,
     is_list_item: bool,
+    /// Whether the current list item already holds a block (paragraph, table, …).
+    item_has_block: bool,
     def_list: DefinitionList,
     is_table: bool,
     is_blockquote: bool,
@@ -116,6 +118,7 @@ impl CommonMarkViewerInternal {
             image: None,
             line: Newline::default(),
             is_list_item: false,
+            item_has_block: false,
             def_list: Default::default(),
             code_block: None,
             code_source: None,
@@ -645,7 +648,9 @@ impl CommonMarkViewerInternal {
         egui_commonmark_backend::report::location(ui.ctx(), src_span.clone(), self.heading_id);
         match event {
             pulldown_cmark::Event::Start(tag) => self.start_tag(ui, tag, cache, options),
-            pulldown_cmark::Event::End(tag) => self.end_tag(ui, tag, cache, options, max_width),
+            pulldown_cmark::Event::End(tag) => {
+                self.end_tag(ui, tag, src_span, cache, options, max_width)
+            }
             pulldown_cmark::Event::Text(text) => {
                 if self.code_block.is_some() {
                     self.code_source = Some(
@@ -680,6 +685,7 @@ impl CommonMarkViewerInternal {
             }
             pulldown_cmark::Event::HardBreak => newline(ui),
             pulldown_cmark::Event::Rule => {
+                self.list_block_start(ui, false);
                 self.line.try_insert_start(ui);
                 rule(ui, self.line.can_insert_end());
             }
@@ -736,6 +742,7 @@ impl CommonMarkViewerInternal {
     ) {
         match tag {
             pulldown_cmark::Tag::Paragraph => {
+                self.list_block_start(ui, true);
                 self.line.try_insert_start(ui);
             }
             pulldown_cmark::Tag::Heading { level, id, .. } => {
@@ -763,9 +770,11 @@ impl CommonMarkViewerInternal {
             // deliberately not using the built in alerts from pulldown-cmark as
             // the markdown itself cannot be localized :( e.g: [!TIP]
             pulldown_cmark::Tag::BlockQuote(_) => {
+                self.list_block_start(ui, false);
                 self.is_blockquote = true;
             }
             pulldown_cmark::Tag::CodeBlock(c) => {
+                self.list_block_start(ui, false);
                 match c {
                     pulldown_cmark::CodeBlockKind::Fenced(lang) => {
                         self.code_block = Some(crate::CodeBlock {
@@ -799,6 +808,7 @@ impl CommonMarkViewerInternal {
 
             pulldown_cmark::Tag::Item => {
                 self.is_list_item = true;
+                self.item_has_block = false;
                 self.list.start_item(ui, options);
             }
 
@@ -810,6 +820,7 @@ impl CommonMarkViewerInternal {
                 footnote(ui, &note);
             }
             pulldown_cmark::Tag::Table(_) => {
+                self.list_block_start(ui, false);
                 self.is_table = true;
             }
             pulldown_cmark::Tag::TableHead => {}
@@ -838,6 +849,7 @@ impl CommonMarkViewerInternal {
                 self.image = Some(crate::Image::new(uri, options));
             }
             pulldown_cmark::Tag::HtmlBlock => {
+                self.list_block_start(ui, false);
                 self.line.try_insert_start(ui);
             }
             pulldown_cmark::Tag::MetadataBlock(_) => {}
@@ -867,6 +879,7 @@ impl CommonMarkViewerInternal {
         &mut self,
         ui: &mut Ui,
         tag: pulldown_cmark::TagEnd,
+        src_span: Range<usize>,
         cache: &mut CommonMarkCache,
         options: &CommonMarkOptions,
         max_width: f32,
@@ -904,6 +917,9 @@ impl CommonMarkViewerInternal {
                 if !self.list.is_inside_a_list() {
                     // Reset all the state and make it ready for the next list that occurs
                     self.list = List::default();
+                } else {
+                    // A nested list counts as a block of the enclosing item.
+                    self.item_has_block = true;
                 }
             }
             pulldown_cmark::TagEnd::Item => {}
@@ -930,12 +946,18 @@ impl CommonMarkViewerInternal {
             }
             pulldown_cmark::TagEnd::Link => {
                 if let Some(link) = self.link.take() {
-                    link.end(ui, cache, options, &mut self.deferred_scroll_to_heading);
+                    link.end(
+                        ui,
+                        cache,
+                        options,
+                        &mut self.deferred_scroll_to_heading,
+                        src_span,
+                    );
                 }
             }
             pulldown_cmark::TagEnd::Image => {
                 if let Some(image) = self.image.take() {
-                    image.end(ui, options);
+                    image.end(ui, options, src_span);
                 }
             }
             pulldown_cmark::TagEnd::HtmlBlock => {
@@ -952,6 +974,30 @@ impl CommonMarkViewerInternal {
             | pulldown_cmark::TagEnd::DefinitionListDefinition => {}
             pulldown_cmark::TagEnd::Superscript | pulldown_cmark::TagEnd::Subscript => {}
         }
+    }
+
+    /// Newline insertion is disabled inside list items, so without this a block would
+    /// continue the previous line. Separate every block after the item's first one the
+    /// same way top-level blocks are separated; other blocks also never share a line.
+    fn list_block_start(&mut self, ui: &mut Ui, paragraph: bool) {
+        if !self.list.is_inside_a_list() {
+            return;
+        }
+        let at_line_start = ui.cursor().min.x <= ui.max_rect().min.x + 0.5;
+        if self.item_has_block || (!paragraph && !at_line_start) {
+            if !at_line_start {
+                if let Some(spacing) = self.paragraph_spacing {
+                    egui_commonmark_backend::report::label(
+                        ui,
+                        egui::RichText::new("\n").line_height(Some(spacing)),
+                    );
+                } else {
+                    newline(ui);
+                }
+            }
+            newline(ui);
+        }
+        self.item_has_block = true;
     }
 
     fn end_code_block(

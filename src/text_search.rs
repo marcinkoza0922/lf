@@ -108,6 +108,25 @@ impl TextIndex {
         index.runs.clone_from(&report.runs);
         index
     }
+    /// Each heading's id, rectangle, and rendered text, in document order.
+    pub fn heading_texts(&self) -> Vec<(usize, Rect, String)> {
+        let mut texts: Vec<_> = self
+            .headings
+            .iter()
+            .map(|(id, rect)| (*id, *rect, String::new()))
+            .collect();
+        let positions: std::collections::HashMap<usize, usize> = texts
+            .iter()
+            .enumerate()
+            .map(|(i, (id, ..))| (*id, i))
+            .collect();
+        for glyph in &self.glyphs {
+            if let Some(i) = glyph.heading.and_then(|id| positions.get(&id)) {
+                texts[*i].2.push_str(&self.text[glyph.bytes.clone()]);
+            }
+        }
+        texts
+    }
     fn rects(&self, range: &Range<usize>) -> Vec<Rect> {
         let start = self.glyphs.partition_point(|g| g.bytes.end <= range.start);
         highlight_rects(

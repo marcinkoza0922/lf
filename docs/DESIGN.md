@@ -63,6 +63,10 @@ portal service and its KDE backend must be installed for the native chooser.
 file reads, isolated system font discovery, and headless rendering/index/cursor
 CPU times. `LF_PROFILE_STARTUP=1` logs native setup and first UI frame
 latency. See [PERFORMANCE.md](PERFORMANCE.md) for results and reproduction.
+`tools/screenshot.rs`: `LF_SCREENSHOT=out.ppm lf FILE` captures the reader's own
+window after 20 frames, writes a binary PPM, and exits. `LF_SCREENSHOT_SIDEBAR=opened|files`
+opens a sidebar tab; preferences are not saved in this mode. Visual checks therefore do not
+depend on window focus or a desktop screenshot tool (convert with `magick out.ppm out.png`).
 
 ## Visible spacing and renderer extension
 
@@ -288,14 +292,31 @@ inline using the existing image loaders (local images; HTTP image fetching remai
 disabled). Recognized audio/video extensions accept local files and HTTP(S)
 URLs; ordinary web links retain browser behavior. Fragment-only links retain
 normal renderer handling. Other local files, including Markdown and plain text,
-render a card with a generic file icon, label, filename, destination tooltip, and
-an Open in default app button. `xdg-open` runs in a worker with the absolute path
-as one process argument. Missing files and launcher failures show errors on the
-corresponding card. Cards record their label in the renderer's source-aware
-report so document search and reading navigation continue to include link text.
+render as compact inline link chips: a painted file icon and the link text in the
+hyperlink color on a faint link-tinted background, one text line tall and kept in
+the surrounding prose. Links to documents the reader displays (`.md`, `.markdown`,
+`.txt`) open in the same window, through the normal open path (scroll position,
+search, and cursor reset; failures show the usual open error). Their right-click
+menu also offers Open in default app. Other files open in the default app on
+click. The tooltip shows the full path and the click action. `xdg-open` runs in a worker with the absolute path as one process
+argument. Missing files and launcher failures add a warning marker after the chip,
+with the error in its tooltip. Chips never wrap internally; a chip that does not
+fit moves to the next line, and over-long labels are truncated.
 
-The local renderer exposes `render_attachment_fn` for link/image destinations;
-returning false retains its ordinary rendering. No HTML execution is added.
+Media (images, audio, video) is shown only when it stands alone on its source line,
+ignoring list and block quote markers, an enclosing link (`[![alt](img)](url)`), and
+a trailing hard-break backslash. Media within other content, including table cells,
+renders as a chip with a disclosure arrow; clicking expands the image or player on
+its own line below the chip, and clicking again collapses it. Expansion is keyed by
+the element's source offset and resets on opening or reloading a document. Icons
+are painted shapes so they do not depend on the selected font's glyph coverage.
+Chips and cards record their label in the renderer's source-aware report so
+document search and reading navigation continue to include link text.
+
+The local renderer exposes `render_attachment_fn` for link/image destinations. The
+callback receives an `Attachment` with the destination, label, and the element's
+source byte range; returning false retains ordinary rendering. No HTML execution
+is added.
 
 `src/playback.rs` loads the system `libmpv.so.2` on first playback. On Nobara/Fedora
 install `mpv-libs`; on Debian/Ubuntu install `libmpv2`. Having the `mpv` executable
@@ -331,7 +352,76 @@ These passed using a temporary extracted libmpv package and `LD_LIBRARY_PATH`,
 without installing system packages. Audible output and interactive visual layout
 have not been manually verified.
 
+## Link navigation, history, and sidebar
+
+Following a link to a readable document (`.md`, `.markdown`, `.txt`) opens it in
+the same window; its context menu keeps Open in default app. Fragment links
+(`#anchor`, `other.md#anchor`) are rendered by the attachment hook as ordinary
+links that request a jump. The anchor is percent-decoded and matched against
+GitHub-style slugs of the rendered heading text (lowercase, punctuation other than
+`-`/`_` removed, spaces to `-`, `-1`/`-2` suffixes for duplicates), or against
+text that slugifies to the same anchor. The jump runs after the destination's
+first layout, scrolls the heading to the top, and highlights it like `[`/`]`;
+an unmatched anchor shows a dismissible error. Same-document links never reload.
+
+`src/history.rs` keeps back/forward stacks (200 entries) of locations: canonical
+path, scroll offset, and reading cursor. Every new destination (chooser, drop,
+quick select, content search, sidebar, document link, heading link) pushes the
+place being left and clears forward history; reopening the current document
+does not. Stepping swaps the current place onto the opposite stack; reload does
+not touch history. Restored offsets are applied over up to 30 frames because a
+newly opened document's height is known only after layout. A destination that no
+longer opens is dropped from history with the usual open error, so stepping
+again continues past it. Back is Ctrl+O, Alt+Left, and mouse button 4
+(egui `Extra1`); Forward is Ctrl+I, Alt+Right, and button 5. They are consumed
+before arrow scrolling, which ignores extra modifiers, and after the search
+window's Ctrl+I Match case toggle. The file chooser moved to Ctrl+Shift+O, which
+is consumed before Ctrl+O for the same reason.
+
+`src/sidebar.rs` is a collapsible left sidebar drawn with egui's
+`Panel::show_switched`: collapsed, a fixed-width rail with an expand chevron and
+painted tab icons (clock for Opened, folder for Files); expanded, a resizable panel
+(min 160 points) with tab labels and a collapse chevron. The switch animates, and
+dragging the edge past the minimum collapses it. There is no toolbar button.
+Opened lists this session's documents (most recent first) and then up to 30
+persisted recent documents not already listed; missing recent files are dimmed
+and cannot be selected. Files reuses the quick-select scan on a cancellable
+background thread and builds a directory tree of `.md`/`.txt` files under the
+launch directory; it rescans when shown again or on Refresh. Expanded folders are
+tracked by absolute path, so the tree is flattened into rows each frame and the
+keyboard and mouse share one model. When the current document changes, its
+ancestors are expanded, the Files selection moves to it, and it is scrolled into
+view. Both lists open documents through the history-recording path. Expansion
+and the tab are stored in preferences.
+
+The sidebar has keyboard focus separately from the document. Backtick (key or
+text event, for layouts that compose it) and Ctrl+E expand the sidebar on their
+tab and focus it; the same key on the focused tab collapses it. A primary press
+inside the expanded sidebar focuses it, and a press elsewhere returns focus to
+the document, as do Esc and opening with Enter or a click. While focused, the
+sidebar consumes its keys before every document handler, and the reading cursor
+and scroll navigation are disabled; Ctrl shortcuts such as back/forward still
+work. A focused sidebar draws an accent line under its tabs and outlines the
+selected row. The selection is kept per tab by path and starts at the current
+document. j/k/↑/↓ move it, Home/End jump, and Enter opens a file (focusing the
+document) or toggles a folder. l/→ expands a folder, steps into an open one, or
+opens a file while keeping focus. h/← collapses a folder or moves to the parent,
+and Tab/Shift+Tab switch tabs. Missing recent files are skipped.
+
+Tests cover history ordering and failure handling, slugs and percent decoding,
+the explorer tree, tab toggling, and a headless end-to-end run of the real reader
+(eframe test contexts): following a cross-document heading link, Ctrl+O/Ctrl+I
+with restored scroll offsets, an in-document jump undone by Alt+Left, and sidebar
+shortcuts. Mouse buttons 4/5 and the visual sidebar layout were checked only
+through code and screenshots, not physical input.
+
 ## Markdown tables
+
+Tables, code blocks, block quotes, rules, and HTML blocks inside list items start
+on their own line at the item's indent, and later paragraphs in the same item are
+separated as at the top level. The renderer disables newline insertion inside list
+items, so it tracks whether the current item already holds a block and inserts the
+break itself. A headless test checks the vertical order and indent.
 
 Table columns share the available reading width, accounting for frame padding and
 column spacing. Cells wrap and rows grow vertically to fit the tallest cell, with a 6-point
